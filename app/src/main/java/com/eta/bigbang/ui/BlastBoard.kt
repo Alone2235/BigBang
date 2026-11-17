@@ -230,20 +230,9 @@ private fun StatusCard(cfg: BigBangConfig, onToggle: (Boolean) -> Unit) {
 
 @Composable
 private fun BlastOrb(enabled: Boolean) {
-    val transition = rememberInfiniteTransition(label = "orb")
-    val pulse by transition.animateFloat(
-        initialValue = 0.9f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(animation = tween(1600), repeatMode = RepeatMode.Reverse),
-        label = "pulse",
-    )
     Box(
         Modifier
             .size(52.dp)
-            .graphicsLayer {
-                scaleX = if (enabled) pulse else 1f
-                scaleY = if (enabled) pulse else 1f
-            }
             .clip(CircleShape)
             .background(
                 if (enabled) SuccessGreen.copy(alpha = 0.14f)

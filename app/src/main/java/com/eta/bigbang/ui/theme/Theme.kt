@@ -7,6 +7,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
@@ -63,33 +64,28 @@ fun AppTheme(darkTheme: Boolean = false, content: @Composable () -> Unit) {
     }
 }
 
-/** 背景：极简白蓝，单层竖渐变 + 极弱径向蓝光 */
+/**
+ * 背景：极简白蓝。
+ *
+ * 性能注意：不使用 radialGradient（会触发 GPU 合成器逐帧重建模糊着色器，
+ * 在小米设备上表现为 RenderEngine 反复刷 makePassBlurBetterDownShader，
+ * 导致主线程卡顿甚至被系统回收）。这里只用一次性的竖向线性渐变。
+ */
 @Composable
 fun AppBackground(dark: Boolean = false, content: @Composable () -> Unit) {
-    val gradient = if (dark) listOf(
-        Color(0xFF101218), Color(0xFF151820), Color(0xFF1A1E27)
-    ) else listOf(
-        Color(0xFFFDFDFE), Color(0xFFF6F7FA), Color(0xFFF0F2F7)
-    )
+    val brush = remember(dark) {
+        val colors = if (dark) listOf(
+            Color(0xFF101218), Color(0xFF151820), Color(0xFF1A1E27)
+        ) else listOf(
+            Color(0xFFFDFDFE), Color(0xFFF6F7FA), Color(0xFFF0F2F7)
+        )
+        Brush.verticalGradient(colors)
+    }
     Box(
         Modifier
             .fillMaxSize()
-            .background(Brush.verticalGradient(gradient))
+            .background(brush)
     ) {
-        Box(
-            Modifier
-                .fillMaxSize()
-                .background(
-                    Brush.radialGradient(
-                        colors = listOf(
-                            HyperBlue.copy(alpha = if (dark) 0.10f else 0.05f),
-                            Color.Transparent
-                        ),
-                        center = Offset(0.5f, 0.1f),
-                        radius = 1200f
-                    )
-                )
-        )
         content()
     }
 }

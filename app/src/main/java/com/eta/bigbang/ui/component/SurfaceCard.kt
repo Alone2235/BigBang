@@ -10,7 +10,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.Dp
@@ -18,14 +17,20 @@ import androidx.compose.ui.unit.dp
 import com.eta.bigbang.ui.theme.Radius
 import com.eta.bigbang.ui.theme.Space
 
-/** 卡片统一外观：白底 + 极淡描边 + 极轻投影，替代纯白平铺 */
+/** 卡片统一外观：白底 + 极淡描边 */
 object CardStyle {
     val background = Color(0xFFFFFFFF)
     val stroke = Color(0x0F1B1F27)      // 约 6% 黑
-    val shadow = Color(0x141B1F27)      // 约 8% 黑
     val subtle = Color(0xFFF7F9FC)      // 次级底
 }
 
+/**
+ * 卡片。
+ *
+ * 性能注意：不使用 shadow()。Compose 的阴影会为每个卡片建立离屏渲染层，
+ * 列表里多张卡片叠加时在小米设备上会造成明显的合成开销。
+ * 这里用描边 + 背景色区分层次，视觉差异极小。
+ */
 @Composable
 fun SurfaceCard(
     modifier: Modifier = Modifier,
@@ -35,12 +40,6 @@ fun SurfaceCard(
 ) {
     Box(
         modifier
-            .shadow(
-                elevation = 1.dp,
-                shape = RoundedCornerShape(radius),
-                ambientColor = CardStyle.shadow,
-                spotColor = CardStyle.shadow
-            )
             .clip(RoundedCornerShape(radius))
             .background(CardStyle.background)
             .border(1.dp, CardStyle.stroke, RoundedCornerShape(radius))
@@ -60,12 +59,6 @@ fun AccentCard(
 ) {
     Box(
         modifier
-            .shadow(
-                2.dp,
-                RoundedCornerShape(radius),
-                ambientColor = accent.copy(alpha = 0.18f),
-                spotColor = accent.copy(alpha = 0.18f)
-            )
             .clip(RoundedCornerShape(radius))
             .background(
                 Brush.verticalGradient(

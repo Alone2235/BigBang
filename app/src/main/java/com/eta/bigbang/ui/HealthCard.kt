@@ -227,14 +227,10 @@ private fun CheckRow(item: CheckItem, onFix: () -> Unit) {
 
 @Composable
 private fun StatusOrb(ok: Boolean, unknown: Boolean, pending: Boolean) {
-    val transition = rememberInfiniteTransition(label = "orb")
-    val pulse by transition.animateFloat(
-        initialValue = 0.45f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(animation = tween(1200), repeatMode = RepeatMode.Reverse),
-        label = "orbPulse",
-    )
+    // 用静态色块代替无限循环动画：无限动画会让静止页面持续占用主线程，
+    // 在没有内容变化时纯属浪费。
     val color = when {
+        pending -> WarnOrange
         ok -> SuccessGreen
         unknown -> WarnOrange
         else -> DangerRed
@@ -242,7 +238,6 @@ private fun StatusOrb(ok: Boolean, unknown: Boolean, pending: Boolean) {
     Box(
         Modifier
             .size(34.dp)
-            .graphicsLayer { alpha = if (pending) pulse else 1f }
             .clip(CircleShape)
             .background(color.copy(alpha = 0.14f))
             .border(1.dp, color.copy(alpha = 0.30f), CircleShape),
