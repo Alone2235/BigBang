@@ -22,11 +22,11 @@ import com.eta.bigbang.Shatter
 /**
  * 模块入口。
  *
- * 核心修正点：
- * 1. android.widget.Editor 是 framework 类，必须用 boot classloader 找，
- *    不能用 lpparam.classLoader（这是上一版完全失效的根本原因）。
- * 2. 不再用 processName == packageName 硬过滤，只排除明显无关的进程。
- * 3. 每一步都打日志，便于定位。
+ * 文本选择的三层兜底（按可靠性排序）：
+ * 1. Editor.startSelectionActionModeAsync —— 任何走系统文本选择的应用都会经过，
+ *    回调里能拿到 Editor 与 mTextView，是通用主路径。
+ * 2. 各家自绘控件（如微信 MMTextView）重写的 onTouchEvent —— 应用自己处理长按时走这里。
+ * 3. TextView.performLongClick —— 最传统的路径。
  */
 class IgnitionHook : IXposedHookLoadPackage, IXposedHookZygoteInit {
 
@@ -42,27 +42,20 @@ class IgnitionHook : IXposedHookLoadPackage, IXposedHookZygoteInit {
     override fun handleLoadPackage(lpparam: XC_LoadPackage.LoadPackageParam) {
         val pkg = lpparam.packageName ?: return
         if (pkg == Config.MODULE_PKG) return
-        // 只跳过 system_server / android 这类没必要处理的
         if (pkg == "android" || pkg == "com.android.systemui") return
 
         val cfg = Settings.loadForHook()
-
-        // 关键：LSPosed 已经把我们注入了这个进程，说明作用域已允许。
-        // 模块内的"生效范围"只用作额外收窄/排除，不再是硬门槛，
-        // 否则用户必须在两处重复配置，极易出现"勾了却不生效"。
         val allowed = cfg.isAllowedHere(pkg)
         XposedBridge.log("$TAG enter pkg=$pkg proc=${lpparam.processName} mode=${cfg.scopeMode} enabled=${cfg.enableHook} allowed=$allowed")
 
-        // 抓宿主 Application，供弹层拿一个稳定的 context
         hookApplicationAttach(lpparam)
 
         if (!cfg.enableHook) return
         if (!allowed) return
 
-        hookTextSelection(lpparam, cfg)
+        hookAll(lpparam, cfg)
     }
 
-    /** 拿宿主 Application context */
     private fun hookApplicationAttach(lpparam: XC_LoadPackage.LoadPackageParam) {
         runCatching {
             XposedHelpers.findAndHookMethod(
@@ -79,39 +72,67 @@ class IgnitionHook : IXposedHookLoadPackage, IXposedHookZygoteInit {
         }.onFailure { XposedBridge.log("$TAG appContext hook failed: ${it.message}") }
     }
 
-    private fun hookTextSelection(lpparam: XC_LoadPackage.LoadPackageParam, cfg: BigBangConfig) {
-        var hooked = 0
+    private fun hookAll(lpparam: XC_LoadPackage.LoadPackageParam, cfg: BigBangConfig) {
+        var total = 0
 
-        // ---- 方式 A：Editor（framework 类，boot classloader）----
+        // ---------- 路径 1：Editor 文本选择（通用主路径）----------
         val editorClass = runCatching {
             XposedHelpers.findClass("android.widget.Editor", null)
         }.getOrNull()
 
         if (editorClass != null) {
-            XposedBridge.log("$TAG found Editor class via boot classloader")
-
-            // 所有名字含 SelectionActionMode 的方法都挂，覆盖各家 ROM 差异
             editorClass.declaredMethods
-                .filter { it.name.contains("SelectionActionMode") || it.name == "performLongClick" }
+                .filter { it.name == "startSelectionActionModeAsync" || it.name == "startSelectionActionMode" }
                 .forEach { m ->
                     val ok = runCatching {
                         XposedBridge.hookMethod(m, object : XC_MethodHook() {
                             override fun afterHookedMethod(param: MethodHookParam) {
-                                XposedBridge.log("$TAG Editor.${m.name} triggered")
-                                onEditorEvent(param.thisObject, cfg)
+                                XposedBridge.log("$TAG Editor.${m.name} fired")
+                                fireFromEditor(param.thisObject, cfg)
                             }
                         })
                     }.isSuccess
                     if (ok) {
-                        hooked++
-                        XposedBridge.log("$TAG hooked Editor.${m.name}(${m.parameterTypes.size} args)")
+                        total++
+                        XposedBridge.log("$TAG hooked Editor.${m.name}")
                     }
                 }
-        } else {
-            XposedBridge.log("$TAG Editor class NOT found")
         }
 
-        // ---- 方式 B：TextView 长按（兜底，覆盖绝大多数场景）----
+        // ---------- 路径 2：自绘控件 onTouchEvent（微信等）----------
+        // 只挂真的声明了 onTouchEvent 的 View 子类里"和文本相关"的那批，
+        // 避免给每个 View 都插桩造成卡顿。
+        val textishClasses = listOf(
+            "com.tencent.mm.ui.widget.MMTextView",
+            "com.tencent.mm.ui.widget.textview.MMTextView",
+        )
+        textishClasses.forEach { cn ->
+            val c = runCatching { XposedHelpers.findClass(cn, lpparam.classLoader) }.getOrNull()
+                ?: return@forEach
+            val ok = runCatching {
+                XposedHelpers.findAndHookMethod(
+                    c, "onTouchEvent", android.view.MotionEvent::class.java,
+                    object : XC_MethodHook() {
+                        override fun afterHookedMethod(param: MethodHookParam) {
+                            val ev = param.args.getOrNull(0) as? android.view.MotionEvent ?: return
+                            // 只看抬手：此时系统已完成长按判定
+                            if (ev.actionMasked != android.view.MotionEvent.ACTION_UP) return
+                            val tv = param.thisObject as? TextView ?: return
+                            val text = tv.text?.toString().orEmpty()
+                            if (text.isBlank()) return
+                            XposedBridge.log("$TAG MMTextView touch-up len=${text.length}")
+                            fire(tv, text, cfg)
+                        }
+                    }
+                )
+            }.isSuccess
+            if (ok) {
+                total++
+                XposedBridge.log("$TAG hooked $cn.onTouchEvent")
+            }
+        }
+
+        // ---------- 路径 3：TextView.performLongClick（传统路径）----------
         val tvOk = runCatching {
             XposedHelpers.findAndHookMethod(
                 TextView::class.java,
@@ -121,20 +142,18 @@ class IgnitionHook : IXposedHookLoadPackage, IXposedHookZygoteInit {
                         val tv = param.thisObject as? TextView ?: return
                         val text = tv.text?.toString().orEmpty()
                         XposedBridge.log("$TAG TextView.performLongClick len=${text.length}")
-                        trigger(tv, text, cfg)
+                        fire(tv, text, cfg)
                     }
                 }
             )
         }.isSuccess
-        if (tvOk) {
-            hooked++
-            XposedBridge.log("$TAG hooked TextView.performLongClick")
-        }
+        if (tvOk) total++
 
-        XposedBridge.log("$TAG total hooked=$hooked on ${lpparam.packageName}")
+        XposedBridge.log("$TAG total hooked=$total on ${lpparam.packageName}")
     }
 
-    private fun onEditorEvent(editorObj: Any?, cfg: BigBangConfig) {
+    /** 从 Editor 实例取 TextView 与选中文本 */
+    private fun fireFromEditor(editorObj: Any?, cfg: BigBangConfig) {
         val editor = editorObj ?: return
         val tv = runCatching {
             XposedHelpers.getObjectField(editor, "mTextView")
@@ -142,13 +161,13 @@ class IgnitionHook : IXposedHookLoadPackage, IXposedHookZygoteInit {
 
         val text = tv.text?.toString().orEmpty()
         if (text.isBlank()) return
-        trigger(tv, text, cfg)
+        fire(tv, text, cfg)
     }
 
-    private fun trigger(view: View, text: String, cfg: BigBangConfig) {
+    private fun fire(view: View, text: String, cfg: BigBangConfig) {
         if (text.isBlank()) return
         val words = Shatter.split(text, cfg.maxBlocks)
-        XposedBridge.log("$TAG tokenize -> ${words.size} words: ${words.take(8)}")
+        XposedBridge.log("$TAG tokenize -> ${words.size} words: ${words.take(6)}")
         if (words.isEmpty()) return
 
         val ctx = appContext ?: runCatching { view.context }.getOrNull() ?: return
