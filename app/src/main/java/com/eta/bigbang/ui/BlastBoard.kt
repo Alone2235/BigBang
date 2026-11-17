@@ -86,7 +86,7 @@ fun BlastBoard() {
     var showBrowserPicker by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
 
-    fun apply(next: BigBangConfig) {
+    fun commit(next: BigBangConfig) {
         cfg = next
         Settings.saveFromUi(ctx, next)
     }
@@ -107,15 +107,15 @@ fun BlastBoard() {
             contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 40.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            item { HeaderCard(cfg) { apply(cfg.copy(enableHook = it)) } }
+            item { HeaderCard(cfg) { commit(cfg.copy(enableHook = it)) } }
 
             item {
                 ScopeCard(
                     cfg = cfg,
-                    onChange = apply,
+                    onChange = ::commit,
                     onOpenPicker = { showAppPicker = true },
                     onCopyRecommended = {
-                        apply(
+                        commit(
                             cfg.copy(
                                 scopeMode = Config.MODE_WHITELIST,
                                 whitelist = RecommendedApps.PACKAGES.toSet(),
@@ -132,13 +132,13 @@ fun BlastBoard() {
                 SearchCard(
                     cfg = cfg,
                     apps = apps,
-                    onChange = apply,
+                    onChange = ::commit,
                     onPickEngine = { showEnginePicker = true },
                     onPickBrowser = { showBrowserPicker = true },
                 )
             }
 
-            item { BehaviorCard(cfg, apply) }
+            item { BehaviorCard(cfg, ::commit) }
 
             item { FooterCard() }
         }
@@ -150,7 +150,7 @@ fun BlastBoard() {
             query = searchQuery, onQueryChange = { searchQuery = it },
             onDismiss = { showAppPicker = false },
             onConfirm = { set ->
-                apply(cfg.copy(whitelist = set))
+                commit(cfg.copy(whitelist = set))
                 showAppPicker = false
                 scope.launch { snackbar.showSnackbar("已选 ${set.size} 个，重启目标应用后生效") }
             },
@@ -165,7 +165,7 @@ fun BlastBoard() {
             onDismiss = { showEnginePicker = false },
             onPick = { id ->
                 val tpl = if (id == "custom") cfg.searchTemplate else SearchEngines.byId(id).template
-                apply(cfg.copy(searchEngineId = id, searchTemplate = tpl))
+                commit(cfg.copy(searchEngineId = id, searchTemplate = tpl))
                 showEnginePicker = false
             },
         )
@@ -178,7 +178,7 @@ fun BlastBoard() {
             selected = cfg.browserPkg,
             onDismiss = { showBrowserPicker = false },
             onPick = { pkg ->
-                apply(cfg.copy(browserPkg = pkg))
+                commit(cfg.copy(browserPkg = pkg))
                 showBrowserPicker = false
             },
         )
