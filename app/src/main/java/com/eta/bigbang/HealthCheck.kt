@@ -61,21 +61,45 @@ object HealthCheck {
         // 精确判断交给 LSPosed 管理器，这里只做"是否出现过"的粗判。
         val found = runCatching {
             db.inputStream().use { ins ->
-                val buf = ByteArray(1 shl 16)
                 val needle = pkg.toByteArray()
-                var matched = false
+                val buf = ByteArray(1 shl 16)
                 var carry = ByteArray(0)
-                var read: Int
-                while (ins.read(buf).also { read = it } > 0) {
-                    val chunk = carry + buf.copyOf(read)
-                    if (chunk.indexOf(needle) >= 0) { matched = true; break }
-                    carry = chunk.takeLast(needle.size)
+                var matched = false
+                while (true) {
+                    val read = ins.read(buf)
+                    if (read <= 0) break
+                    // 拼接上轮尾部，避免匹配词跨块被截断
+                    val chunk = ByteArray(carry.size + read)
+                    System.arraycopy(carry, 0, chunk, 0, carry.size)
+                    System.arraycopy(buf, 0, chunk, carry.size, read)
+
+                    if (indexOf(chunk, needle) >= 0) {
+                        matched = true
+                        break
+                    }
+                    carry = if (chunk.size >= needle.size) {
+                        chunk.copyOfRange(chunk.size - needle.size, chunk.size)
+                    } else {
+                        chunk
+                    }
                 }
                 matched
             }
         }.getOrDefault(false)
 
         return Triple(found, found, if (found) "已登记" else "未登记")
+    }
+
+    /** 字节数组子串查找 */
+    private fun indexOf(haystack: ByteArray, needle: ByteArray): Int {
+        if (needle.isEmpty() || haystack.size < needle.size) return -1
+        outer@ for (i in 0..(haystack.size - needle.size)) {
+            for (j in needle.indices) {
+                if (haystack[i + j] != needle[j]) continue@outer
+            }
+            return i
+        }
+        return -1
     }
 
     /** 悬浮窗权限 */

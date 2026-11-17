@@ -41,6 +41,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -63,6 +64,7 @@ import kotlinx.coroutines.withContext
 @Composable
 fun HealthCard() {
     val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
     var items by remember { mutableStateOf<List<CheckItem>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
     var expanded by remember { mutableStateOf(true) }
@@ -70,7 +72,7 @@ fun HealthCard() {
     fun refresh() {
         loading = true
         // 探测涉及文件系统与进程，放后台
-        kotlinx.coroutines.MainScope().launch {
+        scope.launch {
             val r = withContext(Dispatchers.IO) { HealthCheck.run(ctx, ctx.packageName) }
             items = r
             loading = false
