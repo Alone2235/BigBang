@@ -114,7 +114,7 @@ class PortalHook : IXposedHookLoadPackage, IXposedHookZygoteInit {
     /** 读静态字段 sContent */
     private fun readContent(serviceClass: Class<*>): String? = runCatching {
         val textMode = XposedHelpers.getStaticObjectField(serviceClass, "sIsTextMode")
-        if (Boolean.TRUE != textMode) return null
+        if (true != textMode) return null
         XposedHelpers.getStaticObjectField(serviceClass, "sContent") as? String
     }.getOrNull()
 
@@ -162,9 +162,7 @@ class PortalHook : IXposedHookLoadPackage, IXposedHookZygoteInit {
         XposedBridge.log("$TAG tokenize -> ${words.size} words: ${words.take(6)}")
         if (words.isEmpty()) return
 
-        val ctx = appContext ?: runCatching {
-            android.app.ActivityThread.currentApplication()
-        }.getOrNull() ?: return
+        val ctx = appContext ?: return
 
         if (cfg.enableVibrate) vibrate(ctx)
         BlastOverlay.show(ctx, words, cfg)
