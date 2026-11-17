@@ -33,6 +33,8 @@ class IgnitionHook : IXposedHookLoadPackage, IXposedHookZygoteInit {
     companion object {
         private const val TAG = "BigBang"
         private var appContext: Context? = null
+        private var lastFireAt = 0L
+        private var lastText = ""
     }
 
     override fun initZygote(startupParam: IXposedHookZygoteInit.StartupParam) {
@@ -166,6 +168,13 @@ class IgnitionHook : IXposedHookLoadPackage, IXposedHookZygoteInit {
 
     private fun fire(view: View, text: String, cfg: BigBangConfig) {
         if (text.isBlank()) return
+
+        // 去重：一次长按会经过多个 hook 点，避免弹层反复弹出
+        val now = System.currentTimeMillis()
+        if (now - lastFireAt < 600L && text == lastText) return
+        lastFireAt = now
+        lastText = text
+
         val words = Shatter.split(text, cfg.maxBlocks)
         XposedBridge.log("$TAG tokenize -> ${words.size} words: ${words.take(6)}")
         if (words.isEmpty()) return

@@ -53,6 +53,9 @@ object BlastOverlay {
             !android.provider.Settings.canDrawOverlays(ctx)
         ) {
             android.util.Log.w("BigBang", "无悬浮窗权限，跳过弹层")
+            runCatching {
+                Toast.makeText(ctx, "大爆炸：请授予悬浮窗权限", Toast.LENGTH_LONG).show()
+            }
             return
         }
 

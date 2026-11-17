@@ -6,18 +6,14 @@ import java.util.Locale
 /**
  * 分词器。
  *
- * 目标：不引入几 MB 的第三方词典，用系统自带的 ICU BreakIterator 做「够用」的词边界切分，
- * 同时把中文按字/词混切的粒度处理得比纯字符切分更合理。
- *
- * 策略：
- * 1. 先按行、句末标点切成段，保留段内文本。
- * 2. 段内用 BreakIterator 取词边界；中文环境下 ICU 一般按词切，若切得过细（单字）
- *    会做相邻合并的兜底。
- * 3. 英文/数字按词切，标点独立成块（方便直接复制，不带上标点）。
+ * 不引入第三方词典，用系统 ICU BreakIterator 做词边界切分，并针对
+ * 英文/域名/版本号里的分隔符做二次拆分，避免 "pan.quark.cn" 这种整串成块。
  */
 object Shatter {
 
-    /** 结果：词块列表 */
+    /** 允许拆开的连接符（不含连字符，避免把 well-known 拆散） */
+    private val SEPARATORS = charArrayOf('.', '/', '_', '@', '#', '&', '=', '?', ':', '|', '+')
+
     fun split(text: String, maxBlocks: Int = 200): List<String> {
         if (text.isBlank()) return emptyList()
         val out = ArrayList<String>()
@@ -25,13 +21,13 @@ object Shatter {
 
         for (paragraph in clean.split('\n')) {
             if (paragraph.isBlank()) continue
-            collectParagraph(paragraph, out)
+            collectParagraph(paragraph, out, maxBlocks)
             if (out.size >= maxBlocks) break
         }
         return if (out.size > maxBlocks) out.subList(0, maxBlocks).toList() else out
     }
 
-    private fun collectParagraph(paragraph: String, out: MutableList<String>) {
+    private fun collectParagraph(paragraph: String, out: MutableList<String>, maxBlocks: Int) {
         val bi = BreakIterator.getWordInstance(Locale.CHINA)
         bi.setText(paragraph)
         var start = bi.first()
@@ -45,33 +41,57 @@ object Shatter {
             }
         }
 
-        while (end != BreakIterator.DONE) {
+        while (end != BreakIterator.DONE && out.size < maxBlocks) {
             val token = paragraph.substring(start, end)
             when {
                 token.isBlank() -> flushPending()
 
-                // 纯汉字且长度 1：ICU 把它当单字，先攒着，相邻单字合并成块
+                // 单个汉字：ICU 常切成单字，先攒着，相邻单字合并成块
                 isSingleChinese(token) -> pendingChinese.append(token)
 
-                // 汉字词（2 字及以上）：直接作为一块
+                // 汉字词
                 isChineseWord(token) -> {
                     flushPending()
                     out.add(token)
                 }
 
-                // 拉丁字母/数字/其他文字
+                // 含分隔符的串（域名 / 路径 / 版本号）：拆开再逐个加入
+                token.any { it in SEPARATORS } -> {
+                    flushPending()
+                    splitBySeparators(token).forEach { if (out.size < maxBlocks) out.add(it) }
+                }
+
+                // 普通字母数字
                 token.any { it.isLetterOrDigit() } -> {
                     flushPending()
                     out.add(token)
                 }
 
-                // 纯标点：丢弃，不占块
+                // 纯标点：丢弃
                 else -> flushPending()
             }
             start = end
             end = bi.next()
         }
         flushPending()
+    }
+
+    /** 按分隔符切成多段，去掉空段 */
+    private fun splitBySeparators(token: String): List<String> {
+        val parts = ArrayList<String>()
+        val sb = StringBuilder()
+        for (ch in token) {
+            if (ch in SEPARATORS) {
+                if (sb.isNotEmpty()) {
+                    parts.add(sb.toString())
+                    sb.setLength(0)
+                }
+            } else {
+                sb.append(ch)
+            }
+        }
+        if (sb.isNotEmpty()) parts.add(sb.toString())
+        return parts
     }
 
     private fun isSingleChinese(s: String): Boolean =
