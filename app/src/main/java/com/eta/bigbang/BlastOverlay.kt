@@ -46,18 +46,16 @@ object BlastOverlay {
         }
     }
 
+    /**
+     * 说明：悬浮窗权限不用 canDrawOverlays 预先判断。
+     *
+     * 之前用宿主 context 调 Settings.canDrawOverlays()，查的是微信/传送门有没有
+     * 悬浮窗权限——它们当然没有，于是永远判定为"无权限"，即使模块自己已授权。
+     * 现在改为直接 addView 并捕获真实异常，既不会误报，失败时也能拿到确切原因。
+     */
+
     private fun blast(ctx: Context, words: List<String>, cfg: BigBangConfig) {
         dismiss()
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M &&
-            !android.provider.Settings.canDrawOverlays(ctx)
-        ) {
-            android.util.Log.w("BigBang", "无悬浮窗权限，跳过弹层")
-            runCatching {
-                Toast.makeText(ctx, "大爆炸：请授予悬浮窗权限", Toast.LENGTH_LONG).show()
-            }
-            return
-        }
 
         val wm = ctx.getSystemService(Context.WINDOW_SERVICE) as? WindowManager ?: return
         val d = ctx.resources.displayMetrics.density
@@ -143,7 +141,21 @@ object BlastOverlay {
             y = (56 * d).toInt()
         }
 
-        wm.addView(panelView, params)
+        // 直接尝试添加，用真实结果判断权限，而不是靠 canDrawOverlays 猜。
+        // 跨进程场景下 canDrawOverlays 的判断并不可靠。
+        try {
+            wm.addView(panelView, params)
+        } catch (t: Throwable) {
+            android.util.Log.w("BigBang", "addView failed: ${t.javaClass.simpleName} ${t.message}")
+            runCatching {
+                Toast.makeText(
+                    ctx,
+                    "大爆炸：无法显示浮层（${t.javaClass.simpleName}）",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+            return
+        }
         panel = panelView
         windowManager = wm
 
