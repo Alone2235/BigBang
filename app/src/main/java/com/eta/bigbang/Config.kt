@@ -63,6 +63,9 @@ data class BigBangConfig(
      * - 推荐模式：未手动改白名单时全部放行
      */
     fun isAllowedHere(pkg: String): Boolean {
+        // 传送门是取词通道本身，必须始终允许，否则拿不到任何文字
+        if (pkg == "com.miui.contentcatcher") return true
+
         if (pkg in blacklist) return false
         return when (scopeMode) {
             Config.MODE_WHITELIST -> whitelist.isEmpty() || pkg in whitelist
