@@ -4,10 +4,21 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -17,13 +28,21 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -31,10 +50,14 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -43,19 +66,17 @@ import com.eta.bigbang.Config
 import com.eta.bigbang.RecommendedApps
 import com.eta.bigbang.SearchEngines
 import com.eta.bigbang.Settings
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.FilterChip
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/** 已安装应用条目 */
 data class AppEntry(val pkg: String, val label: String, val isSystem: Boolean)
 
 @Composable
 fun BigBangScreen() {
     val ctx = LocalContext.current
+    val snackbar = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
 
     var cfg by remember { mutableStateOf(Settings.loadFromUi(ctx)) }
     var apps by remember { mutableStateOf<List<AppEntry>>(emptyList()) }
@@ -65,7 +86,7 @@ fun BigBangScreen() {
     var showBrowserPicker by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
 
-    fun persist(next: BigBangConfig) {
+    fun apply(next: BigBangConfig) {
         cfg = next
         Settings.saveFromUi(ctx, next)
     }
@@ -77,165 +98,61 @@ fun BigBangScreen() {
 
     val browsers = remember(apps) { apps.filter { isBrowser(ctx, it.pkg) } }
 
-    Scaffold { inner ->
+    Scaffold(
+        containerColor = MaterialTheme.colorScheme.surface,
+        snackbarHost = { SnackbarHost(snackbar) },
+    ) { padding ->
         LazyColumn(
-            modifier = Modifier.fillMaxSize().padding(inner),
-            contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+            modifier = Modifier.fillMaxSize().padding(padding),
+            contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 40.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
+            item { HeaderCard(cfg) { apply(cfg.copy(enableHook = it)) } }
+
             item {
-                Text("大爆炸", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
-                Text(
-                    "长按文本 → 分词成块 → 点词搜索 / 长按复制",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                ScopeCard(
+                    cfg = cfg,
+                    onChange = apply,
+                    onOpenPicker = { showAppPicker = true },
+                    onCopyRecommended = {
+                        apply(
+                            cfg.copy(
+                                scopeMode = Config.MODE_WHITELIST,
+                                whitelist = RecommendedApps.PACKAGES.toSet(),
+                            )
+                        )
+                        scope.launch {
+                            snackbar.showSnackbar("已复制 ${RecommendedApps.PACKAGES.size} 个应用到白名单")
+                        }
+                    },
                 )
             }
 
             item {
-                StatusCard(cfg = cfg, onToggle = { persist(cfg.copy(enableHook = it)) })
-            }
-
-            item {
-                SectionCard(title = "生效范围") {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        FilterChip(
-                            selected = cfg.scopeMode == Config.MODE_WHITELIST,
-                            onClick = { persist(cfg.copy(scopeMode = Config.MODE_WHITELIST)) },
-                            label = { Text("白名单") },
-                        )
-                        FilterChip(
-                            selected = cfg.scopeMode == Config.MODE_GLOBAL,
-                            onClick = { persist(cfg.copy(scopeMode = Config.MODE_GLOBAL)) },
-                            label = { Text("全局") },
-                        )
-                        FilterChip(
-                            selected = cfg.scopeMode == Config.MODE_RECOMMENDED,
-                            onClick = { persist(cfg.copy(scopeMode = Config.MODE_RECOMMENDED)) },
-                            label = { Text("作者推荐") },
-                        )
-                    }
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        when (cfg.scopeMode) {
-                            Config.MODE_GLOBAL -> "所有应用生效（自动跳过系统界面、电话、设置等敏感页）"
-                            Config.MODE_RECOMMENDED -> "作者精选阅读 / 聊天 / 资讯类应用，共 ${RecommendedApps.PACKAGES.size} 个"
-                            else -> "仅在勾选的应用中生效，当前已选 ${cfg.whitelist.size} 个"
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Spacer(Modifier.height(10.dp))
-                    if (cfg.scopeMode == Config.MODE_WHITELIST) {
-                        OutlinedButton(onClick = { showAppPicker = true }) { Text("选择应用") }
-                    }
-                    if (cfg.scopeMode == Config.MODE_RECOMMENDED) {
-                        OutlinedButton(onClick = {
-                            persist(
-                                cfg.copy(
-                                    scopeMode = Config.MODE_WHITELIST,
-                                    whitelist = RecommendedApps.PACKAGES.toSet(),
-                                )
-                            )
-                        }) { Text("复制成我的白名单") }
-                    }
-                }
-            }
-
-            item {
-                SectionCard(title = "搜索") {
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text("点词时打开搜索", style = MaterialTheme.typography.bodyMedium)
-                            Text(
-                                SearchEngines.byId(cfg.searchEngineId).name,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        Switch(
-                            checked = cfg.enableSearch,
-                            onCheckedChange = { persist(cfg.copy(enableSearch = it)) },
-                        )
-                    }
-                    Spacer(Modifier.height(6.dp))
-                    OutlinedButton(onClick = { showEnginePicker = true }) { Text("搜索引擎") }
-                    if (cfg.searchEngineId == "custom") {
-                        Spacer(Modifier.height(8.dp))
-                        OutlinedTextField(
-                            value = cfg.searchTemplate,
-                            onValueChange = { persist(cfg.copy(searchTemplate = it)) },
-                            label = { Text("URL 模板（用 {query} 占位）") },
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-                    }
-                    Spacer(Modifier.height(12.dp))
-                    HorizontalDivider()
-                    Spacer(Modifier.height(12.dp))
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text("使用指定浏览器", style = MaterialTheme.typography.bodyMedium)
-                            Text(
-                                if (cfg.browserPkg.isBlank()) "跟随系统默认"
-                                else apps.firstOrNull { it.pkg == cfg.browserPkg }?.label ?: cfg.browserPkg,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        OutlinedButton(onClick = { showBrowserPicker = true }) { Text("选择") }
-                    }
-                }
-            }
-
-            item {
-                SectionCard(title = "行为") {
-                    ToggleRow(
-                        title = "点词同时复制",
-                        desc = "点击词块时把该词写入剪贴板",
-                        checked = cfg.enableCopy,
-                        onChange = { persist(cfg.copy(enableCopy = it)) },
-                    )
-                    ToggleRow(
-                        title = "触发时振动",
-                        desc = "长按炸词时轻微振动反馈",
-                        checked = cfg.enableVibrate,
-                        onChange = { persist(cfg.copy(enableVibrate = it)) },
-                    )
-                    Spacer(Modifier.height(6.dp))
-                    OutlinedTextField(
-                        value = cfg.maxBlocks.toString(),
-                        onValueChange = { s ->
-                            s.toIntOrNull()?.let { if (it in 10..1000) persist(cfg.copy(maxBlocks = it)) }
-                        },
-                        label = { Text("最大词块数 (10-1000)") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                }
-            }
-
-            item {
-                Text(
-                    "改动即时保存；在 LSPosed 中勾选作用域后，重启目标应用生效。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                SearchCard(
+                    cfg = cfg,
+                    apps = apps,
+                    onChange = apply,
+                    onPickEngine = { showEnginePicker = true },
+                    onPickBrowser = { showBrowserPicker = true },
                 )
             }
+
+            item { BehaviorCard(cfg, apply) }
+
+            item { FooterCard() }
         }
     }
 
     if (showAppPicker) {
         AppPickerDialog(
-            apps = apps,
-            loading = loading,
-            selected = cfg.whitelist,
-            query = searchQuery,
-            onQueryChange = { searchQuery = it },
+            apps = apps, loading = loading, selected = cfg.whitelist,
+            query = searchQuery, onQueryChange = { searchQuery = it },
             onDismiss = { showAppPicker = false },
             onConfirm = { set ->
-                persist(cfg.copy(whitelist = set))
+                apply(cfg.copy(whitelist = set))
                 showAppPicker = false
+                scope.launch { snackbar.showSnackbar("已选 ${set.size} 个，重启目标应用后生效") }
             },
         )
     }
@@ -248,85 +165,269 @@ fun BigBangScreen() {
             onDismiss = { showEnginePicker = false },
             onPick = { id ->
                 val tpl = if (id == "custom") cfg.searchTemplate else SearchEngines.byId(id).template
-                persist(cfg.copy(searchEngineId = id, searchTemplate = tpl))
+                apply(cfg.copy(searchEngineId = id, searchTemplate = tpl))
                 showEnginePicker = false
             },
         )
     }
 
     if (showBrowserPicker) {
-        val opts = listOf("" to "跟随系统默认") + browsers.map { it.pkg to it.label }
         ChoiceDialog(
             title = "选择浏览器",
-            options = opts,
+            options = listOf("" to "跟随系统默认") + browsers.map { it.pkg to it.label },
             selected = cfg.browserPkg,
             onDismiss = { showBrowserPicker = false },
             onPick = { pkg ->
-                persist(cfg.copy(browserPkg = pkg))
+                apply(cfg.copy(browserPkg = pkg))
                 showBrowserPicker = false
             },
         )
     }
 }
 
+/* ---------------- 顶部渐变状态卡 ---------------- */
+
 @Composable
-private fun StatusCard(cfg: BigBangConfig, onToggle: (Boolean) -> Unit) {
+private fun HeaderCard(cfg: BigBangConfig, onToggle: (Boolean) -> Unit) {
+    val appear = remember { Animatable(0f) }
+    LaunchedEffect(Unit) {
+        appear.animateTo(1f, spring(dampingRatio = 0.72f, stiffness = Spring.StiffnessMediumLow))
+    }
+
     Card(
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
-        shape = RoundedCornerShape(18.dp),
+        modifier = Modifier.fillMaxWidth().graphicsLayer {
+            alpha = appear.value
+            translationY = (1f - appear.value) * 64f
+        },
+        shape = RoundedCornerShape(28.dp),
+        colors = CardDefaults.cardColors(containerColor = Color.Transparent),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+    ) {
+        Box(
+            Modifier.fillMaxWidth().background(
+                Brush.linearGradient(
+                    listOf(
+                        MaterialTheme.colorScheme.primaryContainer,
+                        MaterialTheme.colorScheme.tertiaryContainer,
+                    )
+                )
+            ).padding(22.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    Modifier.size(64.dp).clip(CircleShape).background(
+                        if (cfg.enableHook) Color(0xFF25C06B) else Color(0xFF8A8F98)
+                    ),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        if (cfg.enableHook) "开" else "关",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White,
+                    )
+                }
+                Spacer(Modifier.width(18.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        "长按炸词",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    AnimatedContent(
+                        targetState = cfg.enableHook,
+                        transitionSpec = {
+                            (slideInVertically(spring(dampingRatio = 0.8f)) { it / 2 } + fadeIn(tween(220))) togetherWith
+                                (slideOutVertically(spring(dampingRatio = 0.8f)) { -it / 2 } + fadeOut(tween(140)))
+                        },
+                        label = "status",
+                    ) { enabled ->
+                        Text(
+                            if (enabled) "已启用" else "已停用",
+                            style = MaterialTheme.typography.headlineSmall,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
+                    Text(
+                        "分词成块后可搜索 / 复制",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(checked = cfg.enableHook, onCheckedChange = onToggle)
+            }
+        }
+    }
+}
+
+/* ---------------- 生效范围 ---------------- */
+
+@Composable
+private fun ScopeCard(
+    cfg: BigBangConfig,
+    onChange: (BigBangConfig) -> Unit,
+    onOpenPicker: () -> Unit,
+    onCopyRecommended: () -> Unit,
+) {
+    Card(
+        shape = RoundedCornerShape(24.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
         modifier = Modifier.fillMaxWidth(),
     ) {
-        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                Modifier.size(10.dp).background(
-                    if (cfg.enableHook) Color(0xFF25C06B) else Color(0xFF8A8F98),
-                    CircleShape,
+        Column(Modifier.padding(20.dp)) {
+            Text("生效范围", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.height(14.dp))
+
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(
+                    selected = cfg.scopeMode == Config.MODE_WHITELIST,
+                    onClick = { onChange(cfg.copy(scopeMode = Config.MODE_WHITELIST)) },
+                    label = { Text("白名单") },
+                    leadingIcon = if (cfg.scopeMode == Config.MODE_WHITELIST) {
+                        { Icon(Icons.Rounded.Check, null, Modifier.size(16.dp)) }
+                    } else null,
                 )
-            )
-            Spacer(Modifier.width(10.dp))
-            Column(Modifier.weight(1f)) {
-                Text(
-                    if (cfg.enableHook) "模块已启用" else "模块已停用",
-                    style = MaterialTheme.typography.titleSmall,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                FilterChip(
+                    selected = cfg.scopeMode == Config.MODE_GLOBAL,
+                    onClick = { onChange(cfg.copy(scopeMode = Config.MODE_GLOBAL)) },
+                    label = { Text("全局") },
                 )
-                Text(
-                    "记得在 LSPosed 中勾选作用域应用",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.75f),
+                FilterChip(
+                    selected = cfg.scopeMode == Config.MODE_RECOMMENDED,
+                    onClick = { onChange(cfg.copy(scopeMode = Config.MODE_RECOMMENDED)) },
+                    label = { Text("推荐") },
                 )
             }
-            Switch(checked = cfg.enableHook, onCheckedChange = onToggle)
+
+            Spacer(Modifier.height(12.dp))
+            Text(
+                when (cfg.scopeMode) {
+                    Config.MODE_GLOBAL -> "所有应用生效，自动跳过系统界面与敏感页"
+                    Config.MODE_RECOMMENDED -> "作者精选 ${RecommendedApps.PACKAGES.size} 个阅读 / 聊天 / 资讯应用"
+                    else -> "仅在勾选的应用中生效，已选 ${cfg.whitelist.size} 个"
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            Spacer(Modifier.height(12.dp))
+            when (cfg.scopeMode) {
+                Config.MODE_WHITELIST ->
+                    OutlinedButton(onClick = onOpenPicker) { Text("选择应用") }
+                Config.MODE_RECOMMENDED ->
+                    OutlinedButton(onClick = onCopyRecommended) { Text("复制成我的白名单") }
+                else -> Unit
+            }
         }
     }
 }
 
+/* ---------------- 搜索 ---------------- */
+
 @Composable
-private fun SectionCard(title: String, content: @Composable () -> Unit) {
+private fun SearchCard(
+    cfg: BigBangConfig,
+    apps: List<AppEntry>,
+    onChange: (BigBangConfig) -> Unit,
+    onPickEngine: () -> Unit,
+    onPickBrowser: () -> Unit,
+) {
     Card(
-        shape = RoundedCornerShape(18.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
-        ),
+        shape = RoundedCornerShape(24.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
         modifier = Modifier.fillMaxWidth(),
     ) {
-        Column(Modifier.padding(16.dp)) {
-            Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-            Spacer(Modifier.height(10.dp))
-            content()
+        Column(Modifier.padding(20.dp)) {
+            Text("搜索与浏览器", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.height(12.dp))
+
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("点词时打开搜索", style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        SearchEngines.byId(cfg.searchEngineId).name,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(
+                    checked = cfg.enableSearch,
+                    onCheckedChange = { onChange(cfg.copy(enableSearch = it)) },
+                )
+            }
+
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(onClick = onPickEngine) { Text("搜索引擎") }
+
+            if (cfg.searchEngineId == "custom") {
+                Spacer(Modifier.height(10.dp))
+                OutlinedTextField(
+                    value = cfg.searchTemplate,
+                    onValueChange = { onChange(cfg.copy(searchTemplate = it)) },
+                    label = { Text("URL 模板（{query} 占位）") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+
+            Spacer(Modifier.height(14.dp))
+            HorizontalDivider()
+            Spacer(Modifier.height(14.dp))
+
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("使用指定浏览器", style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        if (cfg.browserPkg.isBlank()) "跟随系统默认"
+                        else apps.firstOrNull { it.pkg == cfg.browserPkg }?.label ?: cfg.browserPkg,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                OutlinedButton(onClick = onPickBrowser) { Text("选择") }
+            }
+        }
+    }
+}
+
+/* ---------------- 行为 ---------------- */
+
+@Composable
+private fun BehaviorCard(cfg: BigBangConfig, onChange: (BigBangConfig) -> Unit) {
+    Card(
+        shape = RoundedCornerShape(24.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(20.dp)) {
+            Text("行为", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.height(14.dp))
+
+            ToggleRow("点词同时复制", "点击词块时把该词写入剪贴板", cfg.enableCopy) {
+                onChange(cfg.copy(enableCopy = it))
+            }
+            ToggleRow("触发时振动", "长按炸词时轻微振动反馈", cfg.enableVibrate) {
+                onChange(cfg.copy(enableVibrate = it))
+            }
+
+            Spacer(Modifier.height(6.dp))
+            OutlinedTextField(
+                value = cfg.maxBlocks.toString(),
+                onValueChange = { s ->
+                    s.toIntOrNull()?.let { if (it in 10..1000) onChange(cfg.copy(maxBlocks = it)) }
+                },
+                label = { Text("最大词块数 (10-1000)") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
         }
     }
 }
 
 @Composable
-private fun ToggleRow(
-    title: String,
-    desc: String,
-    checked: Boolean,
-    onChange: (Boolean) -> Unit,
-) {
+private fun ToggleRow(title: String, desc: String, checked: Boolean, onChange: (Boolean) -> Unit) {
     Row(
-        Modifier.fillMaxWidth().padding(vertical = 4.dp),
+        Modifier.fillMaxWidth().padding(vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
@@ -341,7 +442,29 @@ private fun ToggleRow(
     }
 }
 
-/** 读取已安装应用 */
+@Composable
+private fun FooterCard() {
+    Card(
+        shape = RoundedCornerShape(24.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+        ),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(20.dp)) {
+            Text("提示", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "改动即时保存。在 LSPosed 中勾选作用域后，需重启目标应用才会生效。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+/* ---------------- 数据 ---------------- */
+
 private fun loadApps(ctx: Context): List<AppEntry> {
     val pm = ctx.packageManager
     val self = ctx.packageName
@@ -350,29 +473,24 @@ private fun loadApps(ctx: Context): List<AppEntry> {
             .asSequence()
             .filter { it.packageName != self }
             .map { pi ->
-                val appInfo = pi.applicationInfo
-                val sys = (appInfo?.flags ?: 0) and
+                val ai = pi.applicationInfo
+                val sys = (ai?.flags ?: 0) and
                     (android.content.pm.ApplicationInfo.FLAG_SYSTEM or
                         android.content.pm.ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) != 0
-                val label = if (appInfo != null) {
-                    runCatching { pm.getApplicationLabel(appInfo).toString() }
-                        .getOrDefault(pi.packageName)
+                val label = if (ai != null) {
+                    runCatching { pm.getApplicationLabel(ai).toString() }.getOrDefault(pi.packageName)
                 } else pi.packageName
-                AppEntry(
-                    pkg = pi.packageName,
-                    label = label,
-                    isSystem = sys,
-                )
+                AppEntry(pi.packageName, label, sys)
             }
             .sortedBy { it.label.lowercase() }
             .toList()
     }.getOrDefault(emptyList())
 }
 
-/** 是否可响应 https 的浏览器 */
 private fun isBrowser(ctx: Context, pkg: String): Boolean = runCatching {
     val pm = ctx.packageManager
-    val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://example.com"))
-    pm.queryIntentActivities(intent, PackageManager.MATCH_ALL)
-        .any { it.activityInfo.packageName == pkg }
+    pm.queryIntentActivities(
+        Intent(Intent.ACTION_VIEW, Uri.parse("https://example.com")),
+        PackageManager.MATCH_ALL,
+    ).any { it.activityInfo.packageName == pkg }
 }.getOrDefault(false)
