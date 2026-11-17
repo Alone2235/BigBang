@@ -3,10 +3,9 @@ package com.eta.bigbang.hook
 import android.app.Application
 import android.content.Context
 import android.os.Build
-import android.os.Bundle
 import android.os.VibrationEffect
 import android.os.Vibrator
-import android.view.View
+import android.widget.Toast
 import de.robv.android.xposed.IXposedHookLoadPackage
 import de.robv.android.xposed.IXposedHookZygoteInit
 import de.robv.android.xposed.XC_MethodHook
@@ -20,32 +19,29 @@ import com.eta.bigbang.Settings
 import com.eta.bigbang.Shatter
 
 /**
- * 传送门（ContentCatcher）取词入口。
+ * 传送门（Taplus / ContentExtension）取词入口。
  *
- * 为什么走这条路：
- * 微信等应用用自绘 Canvas 渲染文字，不经过 TextView.performLongClick，
- * 也不经过 MMTextView.onTouchEvent。系统传送门是唯一能拿到任意页面文字的通道。
+ * 参考 MMGG / HyperDragShare 的 GPL 实现，按本机实测校正：
+ *  - 目标包是 com.miui.contentextension，不是 com.miui.contentcatcher
+ *  - 核心类：com.miui.contentextension.services.TextContentExtensionService
+ *  - 取词：静态字段 sContent（文本模式由 sIsTextMode 判定），
+ *         来源应用由 getInjectorPackage() 给出
+ *  - 触发时机：hook service 的 onStartCommand / onStartPick
  *
- * 实测环境：ContentCatcher 4.1.7，/product/app/ContentCatcherOS3_1
- * 关键类：com.miui.catcherpatch.ViewContentFetcher
- * 关键方法：
- *   fetchViewContent(View, int) -> Bundle
- *   fetchNativeViewContent(View, boolean) -> Bundle
- *   fetchWechatDefaultContent(View, int) -> Bundle
- * Bundle 内文本键：BUNDLE_VIEW_CONTENT
+ * 本机验证：MIUIContentExtension 4.1.9，上述字段/方法均存在。
  */
 class PortalHook : IXposedHookLoadPackage, IXposedHookZygoteInit {
 
     companion object {
         private const val TAG = "BigBang"
-        private const val PORTAL_PKG = "com.miui.contentcatcher"
-        private const val FETCHER_CLASS = "com.miui.catcherpatch.ViewContentFetcher"
-        private const val KEY_VIEW_CONTENT = "BUNDLE_VIEW_CONTENT"
+        private const val PORTAL_PKG = "com.miui.contentextension"
+        private const val SERVICE_CLASS =
+            "com.miui.contentextension.services.TextContentExtensionService"
 
         private var appContext: Context? = null
         private var lastFireAt = 0L
         private var lastText = ""
-        private var hooked = false
+        @Volatile private var serviceHooked = false
     }
 
     override fun initZygote(startupParam: IXposedHookZygoteInit.StartupParam) {
@@ -55,114 +51,110 @@ class PortalHook : IXposedHookLoadPackage, IXposedHookZygoteInit {
     override fun handleLoadPackage(lpparam: XC_LoadPackage.LoadPackageParam) {
         val pkg = lpparam.packageName ?: return
         if (pkg == Config.MODULE_PKG) return
+        if (pkg != PORTAL_PKG) return
 
         val cfg = Settings.loadForHook()
-        XposedBridge.log("$TAG enter pkg=$pkg enabled=${cfg.enableHook} allowed=${cfg.isAllowedHere(pkg)}")
-
-        hookApplicationAttach(lpparam)
-
+        XposedBridge.log("$TAG enter $pkg enabled=${cfg.enableHook}")
         if (!cfg.enableHook) return
-        if (!cfg.isAllowedHere(pkg)) return
-        if (hooked) return
+        if (serviceHooked) return
 
-        when (pkg) {
-            PORTAL_PKG -> hookPortal(lpparam, cfg)
-            else -> hookFallback(lpparam, cfg)
-        }
+        hookService(lpparam, cfg)
     }
 
-    private fun hookApplicationAttach(lpparam: XC_LoadPackage.LoadPackageParam) {
-        runCatching {
-            XposedHelpers.findAndHookMethod(
-                android.app.Instrumentation::class.java,
-                "callApplicationOnCreate",
-                Application::class.java,
-                object : XC_MethodHook() {
-                    override fun afterHookedMethod(param: MethodHookParam) {
-                        val app = param.args.getOrNull(0) as? Application ?: return
-                        appContext = app.applicationContext
-                    }
-                }
-            )
-        }.onFailure { XposedBridge.log("$TAG appContext hook failed: ${it.message}") }
-    }
-
-    /* ---------------- 主路径：传送门取词 ---------------- */
-
-    private fun hookPortal(lpparam: XC_LoadPackage.LoadPackageParam, cfg: BigBangConfig) {
+    /** hook 传送门 TextContentExtensionService，读 sContent 取词 */
+    private fun hookService(lpparam: XC_LoadPackage.LoadPackageParam, cfg: BigBangConfig) {
         val clazz = runCatching {
-            XposedHelpers.findClass(FETCHER_CLASS, lpparam.classLoader)
+            XposedHelpers.findClass(SERVICE_CLASS, lpparam.classLoader)
         }.getOrNull()
 
         if (clazz == null) {
-            XposedBridge.log("$TAG ViewContentFetcher NOT found in $PORTAL_PKG")
+            XposedBridge.log("$TAG $SERVICE_CLASS NOT found")
             return
         }
-        XposedBridge.log("$TAG found $FETCHER_CLASS")
+        XposedBridge.log("$TAG found $SERVICE_CLASS")
 
-        // 覆盖所有可能返回取词结果的 fetch* 方法
-        val targets = listOf(
-            "fetchViewContent",
-            "fetchNativeViewContent",
-            "fetchTargetViewContent",
-            "fetchDefaultContent",
-            "fetchWechatDefaultContent",
-        )
+        // 抓 service 的 context，供弹层用
+        runCatching {
+            XposedHelpers.findAndHookMethod(clazz, "onCreate", object : XC_MethodHook() {
+                override fun afterHookedMethod(param: MethodHookParam) {
+                    val svc = param.thisObject as? Context ?: return
+                    appContext = svc.applicationContext
+                    XposedBridge.log("$TAG portal service created")
+                }
+            })
+        }
 
+        // 长按取词会走 onStartCommand / onStartPick，挂这些点读 sContent
+        val triggers = listOf("onStartCommand", "onStartPick")
         var count = 0
-        for (name in targets) {
+        for (name in triggers) {
             clazz.declaredMethods.filter { it.name == name }.forEach { m ->
                 val ok = runCatching {
                     XposedBridge.hookMethod(m, object : XC_MethodHook() {
                         override fun afterHookedMethod(param: MethodHookParam) {
-                            val result = param.result as? Bundle ?: return
-                            val text = result.getCharSequence(KEY_VIEW_CONTENT)?.toString()
-                                ?: return
-                            if (text.isBlank()) return
-                            XposedBridge.log("$TAG ${m.name} -> len=${text.length}")
-                            fire(text, cfg)
+                            readAndFire(param.thisObject, cfg)
                         }
                     })
                 }.isSuccess
                 if (ok) {
                     count++
-                    XposedBridge.log("$TAG hooked $FETCHER_CLASS.${m.name}(${m.parameterTypes.size})")
+                    XposedBridge.log("$TAG hooked ${m.name}(${m.parameterTypes.size})")
                 }
             }
         }
-        hooked = count > 0
-        XposedBridge.log("$TAG portal hooked=$count")
+
+        serviceHooked = count > 0
+        XposedBridge.log("$TAG service hooks=$count")
+
+        // 兜底：即使触发点没命中，也周期性读 sContent。
+        // 传送门在识别完成后才把文字写进静态字段，周期轮询最稳。
+        startPolling(clazz, cfg)
     }
 
-    /* ---------------- 兜底：普通应用的标准控件 ---------------- */
+    /** 读静态字段 sContent */
+    private fun readContent(serviceClass: Class<*>): String? = runCatching {
+        val textMode = XposedHelpers.getStaticObjectField(serviceClass, "sIsTextMode")
+        if (Boolean.TRUE != textMode) return null
+        XposedHelpers.getStaticObjectField(serviceClass, "sContent") as? String
+    }.getOrNull()
 
-    private fun hookFallback(lpparam: XC_LoadPackage.LoadPackageParam, cfg: BigBangConfig) {
-        // 只有传送到取不到内容时，普通应用仍走标准控件
-        val tvOk = runCatching {
-            XposedHelpers.findAndHookMethod(
-                android.widget.TextView::class.java,
-                "performLongClick",
-                object : XC_MethodHook() {
-                    override fun afterHookedMethod(param: MethodHookParam) {
-                        val tv = param.thisObject as? android.widget.TextView ?: return
-                        val text = tv.text?.toString().orEmpty()
-                        if (text.isBlank()) return
+    private fun readAndFire(serviceObj: Any?, cfg: BigBangConfig) {
+        val clazz = serviceObj?.javaClass ?: return
+        val text = readContent(clazz) ?: return
+        if (text.isBlank()) return
+        fire(text, cfg)
+    }
+
+    /** 周期轮询静态字段：传送门把结果写进 sContent 的时刻不一定与 hook 点重合 */
+    private fun startPolling(clazz: Class<*>, cfg: BigBangConfig) {
+        val t = Thread {
+            var last = ""
+            while (!Thread.currentThread().isInterrupted) {
+                try {
+                    val text = readContent(clazz)
+                    if (!text.isNullOrBlank() && text != last) {
+                        last = text
+                        XposedBridge.log("$TAG poll got text len=${text.length}")
                         fire(text, cfg)
                     }
+                    Thread.sleep(250)
+                } catch (e: InterruptedException) {
+                    break
+                } catch (t2: Throwable) {
+                    Thread.sleep(1000)
                 }
-            )
-        }.isSuccess
-        if (tvOk) hooked = true
+            }
+        }
+        t.isDaemon = true
+        t.name = "BigBang-PortalPoll"
+        t.start()
+        XposedBridge.log("$TAG polling started")
     }
-
-    /* ---------------- 触发弹层 ---------------- */
 
     private fun fire(text: String, cfg: BigBangConfig) {
         if (text.isBlank()) return
-
-        // 一次长按会命中多个 hook 点，去重
         val now = System.currentTimeMillis()
-        if (now - lastFireAt < 700L && text == lastText) return
+        if (now - lastFireAt < 800L && text == lastText) return
         lastFireAt = now
         lastText = text
 
@@ -170,7 +162,10 @@ class PortalHook : IXposedHookLoadPackage, IXposedHookZygoteInit {
         XposedBridge.log("$TAG tokenize -> ${words.size} words: ${words.take(6)}")
         if (words.isEmpty()) return
 
-        val ctx = appContext ?: return
+        val ctx = appContext ?: runCatching {
+            android.app.ActivityThread.currentApplication()
+        }.getOrNull() ?: return
+
         if (cfg.enableVibrate) vibrate(ctx)
         BlastOverlay.show(ctx, words, cfg)
     }
