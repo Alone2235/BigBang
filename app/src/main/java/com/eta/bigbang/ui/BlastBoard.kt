@@ -135,7 +135,7 @@ fun LargeShatterScreen() {
             item {
                 ScopeCard(
                     cfg = cfg,
-                    onChange = commit,
+                    onChange = { commit(it) },
                     onOpenPicker = { showPicker = true },
                     onCopyRecommended = {
                         commit(
@@ -151,13 +151,13 @@ fun LargeShatterScreen() {
                 )
             }
 
-            item { EngineCard(cfg, onChange = commit) }
+            item { EngineCard(cfg, onChange = { commit(it) }) }
 
-            item { BrowserCard(cfg, browsers, onChange = commit) }
+            item { BrowserCard(cfg, browsers, onChange = { commit(it) }) }
 
             item { DetailCard(cfg) }
 
-            item { AdvancedCard(cfg, onChange = commit) }
+            item { AdvancedCard(cfg, onChange = { commit(it) }) }
 
             item { FooterCard(cfg) }
         }
