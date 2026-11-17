@@ -73,7 +73,7 @@ import kotlinx.coroutines.withContext
 data class AppEntry(val pkg: String, val label: String, val isSystem: Boolean)
 
 @Composable
-fun BigBangScreen() {
+fun BlastBoard() {
     val ctx = LocalContext.current
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()

@@ -15,7 +15,7 @@ import java.util.Locale
  *    会做相邻合并的兜底。
  * 3. 英文/数字按词切，标点独立成块（方便直接复制，不带上标点）。
  */
-object Tokenizer {
+object Shatter {
 
     /** 结果：词块列表 */
     fun split(text: String, maxBlocks: Int = 200): List<String> {

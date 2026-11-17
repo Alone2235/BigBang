@@ -14,10 +14,10 @@ import de.robv.android.xposed.XposedBridge
 import de.robv.android.xposed.XposedHelpers
 import de.robv.android.xposed.callbacks.XC_LoadPackage
 import com.eta.bigbang.BigBangConfig
-import com.eta.bigbang.BigBangLayer
+import com.eta.bigbang.BlastOverlay
 import com.eta.bigbang.Config
 import com.eta.bigbang.Settings
-import com.eta.bigbang.Tokenizer
+import com.eta.bigbang.Shatter
 
 /**
  * 模块入口。
@@ -28,7 +28,7 @@ import com.eta.bigbang.Tokenizer
  * 2. 不再用 processName == packageName 硬过滤，只排除明显无关的进程。
  * 3. 每一步都打日志，便于定位。
  */
-class HookEntry : IXposedHookLoadPackage, IXposedHookZygoteInit {
+class IgnitionHook : IXposedHookLoadPackage, IXposedHookZygoteInit {
 
     companion object {
         private const val TAG = "BigBang"
@@ -142,14 +142,14 @@ class HookEntry : IXposedHookLoadPackage, IXposedHookZygoteInit {
 
     private fun trigger(view: View, text: String, cfg: BigBangConfig) {
         if (text.isBlank()) return
-        val words = Tokenizer.split(text, cfg.maxBlocks)
+        val words = Shatter.split(text, cfg.maxBlocks)
         XposedBridge.log("$TAG tokenize -> ${words.size} words: ${words.take(8)}")
         if (words.isEmpty()) return
 
         val ctx = appContext ?: runCatching { view.context }.getOrNull() ?: return
         if (cfg.enableVibrate) vibrate(ctx)
 
-        BigBangLayer.show(ctx, words, cfg)
+        BlastOverlay.show(ctx, words, cfg)
     }
 
     private fun vibrate(ctx: Context) {

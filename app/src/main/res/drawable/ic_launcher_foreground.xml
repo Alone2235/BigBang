@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 大爆炸图标：中心炸裂的碎片，象征文本被炸开成词块 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- 中心圆 -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M54,54 m-9,0 a9,9 0 1,0 18,0 a9,9 0 1,0 -18,0" />
+
+    <!-- 八个方向的碎片 -->
+    <path android:fillColor="#FFFFFF" android:pathData="M51,30 L57,30 L55,20 L53,20 Z" />
+    <path android:fillColor="#FFFFFF" android:pathData="M51,78 L57,78 L55,88 L53,88 Z" />
+    <path android:fillColor="#FFFFFF" android:pathData="M30,51 L30,57 L20,55 L20,53 Z" />
+    <path android:fillColor="#FFFFFF" android:pathData="M78,51 L78,57 L88,55 L88,53 Z" />
+
+    <path android:fillColor="#FFFFFF" android:pathData="M37,34 L41,30 L33,24 L29,28 Z" />
+    <path android:fillColor="#FFFFFF" android:pathData="M67,74 L71,70 L79,76 L75,80 Z" />
+    <path android:fillColor="#FFFFFF" android:pathData="M74,37 L70,33 L76,25 L80,29 Z" />
+    <path android:fillColor="#FFFFFF" android:pathData="M34,67 L30,71 L24,65 L28,61 Z" />
+</vector>

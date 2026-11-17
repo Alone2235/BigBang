@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">大爆炸</string>
-    <string name="xposed_desc">长按文本爆词：分词成块，可选词搜索/复制/翻译。生效范围可自定义（全局 \/ 白名单 \/ 作者推荐），搜索引擎与浏览器均可自选。</string>
+    <string name="xposed_desc">长按文本爆词：分词成块，可选词搜索 / 复制 / 翻译。生效范围可自定义（全局 / 白名单 / 作者推荐），搜索引擎与浏览器均可自选。</string>
 </resources>
