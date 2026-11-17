@@ -13,6 +13,8 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -30,8 +32,7 @@ import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.KeyboardArrowUp
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
+import androidx.compose.material.icons.rounded.QuestionMark
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -53,13 +54,21 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.eta.bigbang.CheckItem
 import com.eta.bigbang.HealthCheck
+import com.eta.bigbang.ui.component.SurfaceCard
+import com.eta.bigbang.ui.theme.DangerRed
+import com.eta.bigbang.ui.theme.HyperBlue
+import com.eta.bigbang.ui.theme.Radius
+import com.eta.bigbang.ui.theme.Space
+import com.eta.bigbang.ui.theme.SuccessGreen
+import com.eta.bigbang.ui.theme.TextAlpha
+import com.eta.bigbang.ui.theme.WarnOrange
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
  * 授权与环境检测面板。
- * 只做真实探测展示，缺什么就给对应入口。
+ * 三种状态：通过 / 待处理 / 无法探测（缺 Root 时如实标注，不谎报未安装）。
  */
 @Composable
 fun HealthCard() {
@@ -71,7 +80,6 @@ fun HealthCard() {
 
     fun refresh() {
         loading = true
-        // 探测涉及文件系统与进程，放后台
         scope.launch {
             val r = withContext(Dispatchers.IO) { HealthCheck.run(ctx, ctx.packageName) }
             items = r
@@ -81,57 +89,51 @@ fun HealthCard() {
 
     LaunchedEffect(Unit) { refresh() }
 
+    val failCount = items.count { !it.ok && !it.unknown }
+    val unknownCount = items.count { it.unknown }
     val allOk = items.isNotEmpty() && items.all { it.ok }
-    val failCount = items.count { !it.ok }
 
-    Card(
-        modifier = Modifier.fillMaxWidth().animateContentSize(),
-        shape = RoundedCornerShape(24.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = if (allOk)
-                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
-            else
-                MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.45f)
-        ),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
-    ) {
-        Column(Modifier.padding(18.dp)) {
-            // 标题行
-            Row(
-                Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                StatusOrb(ok = allOk, pending = loading)
-                Spacer(Modifier.width(14.dp))
+    SurfaceCard(modifier = Modifier.fillMaxWidth().animateContentSize()) {
+        Column {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                StatusOrb(ok = allOk, unknown = unknownCount > 0, pending = loading)
+                Spacer(Modifier.width(Space.sm))
                 Column(Modifier.weight(1f)) {
                     Text(
                         "运行环境",
                         style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = TextAlpha.secondary),
                     )
                     Text(
                         when {
                             loading -> "检测中…"
                             allOk -> "全部就绪"
-                            else -> "$failCount 项待处理"
+                            else -> buildString {
+                                if (failCount > 0) append("$failCount 项待处理")
+                                if (failCount > 0 && unknownCount > 0) append(" · ")
+                                if (unknownCount > 0) append("$unknownCount 项无法探测")
+                            }
                         },
-                        style = MaterialTheme.typography.titleMedium,
+                        style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.SemiBold,
                     )
                 }
-                if (!loading && failCount > 0) {
-                    FilledTonalButton(onClick = { refresh() }) { Text("重新检测") }
+                if (!loading) {
+                    FilledTonalButton(
+                        onClick = { refresh() },
+                        shape = RoundedCornerShape(Radius.pill),
+                    ) { Text("重新检测", style = MaterialTheme.typography.labelSmall) }
                 }
             }
 
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(Space.xs))
 
-            // 展开/收起
             Row(
                 Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(12.dp))
-                    .padding(vertical = 2.dp),
+                    .clip(RoundedCornerShape(Radius.small))
+                    .clickable { expanded = !expanded }
+                    .padding(vertical = Space.xxs),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Spacer(Modifier.weight(1f))
@@ -139,42 +141,35 @@ fun HealthCard() {
                     if (expanded) Icons.Rounded.KeyboardArrowUp else Icons.Rounded.KeyboardArrowDown,
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier
-                        .size(24.dp)
-                        .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.3f)),
                 )
             }
 
-            AnimatedVisibility(
-                visible = expanded,
-                enter = expandVertically() + fadeIn(),
-            ) {
+            AnimatedVisibility(visible = expanded, enter = expandVertically() + fadeIn()) {
                 Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     items.forEach { item ->
-                        CheckRow(
-                            item = item,
-                            onFix = {
-                                when (item.key) {
-                                    "overlay" -> ctx.startActivity(
-                                        Intent(
-                                            AndroidSettings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                                            Uri.parse("package:${ctx.packageName}"),
-                                        ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                    )
-                                    "notify" -> ctx.startActivity(
-                                        Intent(AndroidSettings.ACTION_APP_NOTIFICATION_SETTINGS)
-                                            .putExtra(AndroidSettings.EXTRA_APP_PACKAGE, ctx.packageName)
-                                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                    )
-                                    "registered", "lsposed" -> ctx.startActivity(
-                                        ctx.packageManager.getLaunchIntentForPackage("org.lsposed.manager")
-                                            ?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                    )
-                                    else -> Unit
-                                }
-                            },
-                        )
+                        CheckRow(item) {
+                            when (item.key) {
+                                "overlay" -> ctx.startActivity(
+                                    Intent(
+                                        AndroidSettings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                        Uri.parse("package:${ctx.packageName}"),
+                                    ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                )
+                                "notify" -> ctx.startActivity(
+                                    Intent(AndroidSettings.ACTION_APP_NOTIFICATION_SETTINGS)
+                                        .putExtra(AndroidSettings.EXTRA_APP_PACKAGE, ctx.packageName)
+                                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                )
+                                "registered", "lsposed" ->
+                                    ctx.packageManager.getLaunchIntentForPackage("org.lsposed.manager")
+                                        ?.let {
+                                            ctx.startActivity(
+                                                it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                            )
+                                        }
+                                else -> Unit
+                            }
+                        }
                     }
                 }
             }
@@ -184,27 +179,31 @@ fun HealthCard() {
 
 @Composable
 private fun CheckRow(item: CheckItem, onFix: () -> Unit) {
+    val dotColor = when {
+        item.ok -> SuccessGreen
+        item.unknown -> WarnOrange
+        else -> DangerRed
+    }
     Row(
-        Modifier.fillMaxWidth().padding(vertical = 7.dp),
+        Modifier.fillMaxWidth().padding(vertical = Space.xs),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(
-            Modifier
-                .size(22.dp)
-                .clip(CircleShape)
-                .background(
-                    if (item.ok) Color(0xFF25C06B) else MaterialTheme.colorScheme.error
-                ),
+            Modifier.size(20.dp).clip(CircleShape).background(dotColor),
             contentAlignment = Alignment.Center,
         ) {
             Icon(
-                if (item.ok) Icons.Rounded.Check else Icons.Rounded.Close,
+                when {
+                    item.ok -> Icons.Rounded.Check
+                    item.unknown -> Icons.Rounded.QuestionMark
+                    else -> Icons.Rounded.Close
+                },
                 contentDescription = null,
                 tint = Color.White,
-                modifier = Modifier.size(14.dp),
+                modifier = Modifier.size(13.dp),
             )
         }
-        Spacer(Modifier.width(12.dp))
+        Spacer(Modifier.width(Space.sm))
         Column(Modifier.weight(1f)) {
             Text(
                 item.title,
@@ -214,19 +213,20 @@ private fun CheckRow(item: CheckItem, onFix: () -> Unit) {
             Text(
                 if (item.ok) item.desc else "${item.detail} · ${item.desc}",
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = TextAlpha.secondary),
             )
         }
-        AnimatedVisibility(visible = !item.ok) {
-            FilledTonalButton(onClick = onFix) {
-                Text(if (item.key == "root") "说明" else "去处理", style = MaterialTheme.typography.labelSmall)
-            }
+        AnimatedVisibility(visible = !item.ok && !item.unknown) {
+            FilledTonalButton(
+                onClick = onFix,
+                shape = RoundedCornerShape(Radius.pill),
+            ) { Text("去处理", style = MaterialTheme.typography.labelSmall) }
         }
     }
 }
 
 @Composable
-private fun StatusOrb(ok: Boolean, pending: Boolean) {
+private fun StatusOrb(ok: Boolean, unknown: Boolean, pending: Boolean) {
     val transition = rememberInfiniteTransition(label = "orb")
     val pulse by transition.animateFloat(
         initialValue = 0.45f,
@@ -234,25 +234,29 @@ private fun StatusOrb(ok: Boolean, pending: Boolean) {
         animationSpec = infiniteRepeatable(animation = tween(1200), repeatMode = RepeatMode.Reverse),
         label = "orbPulse",
     )
+    val color = when {
+        ok -> SuccessGreen
+        unknown -> WarnOrange
+        else -> DangerRed
+    }
     Box(
         Modifier
-            .size(36.dp)
+            .size(34.dp)
             .graphicsLayer { alpha = if (pending) pulse else 1f }
             .clip(CircleShape)
-            .background(
-                when {
-                    pending -> MaterialTheme.colorScheme.outline
-                    ok -> Color(0xFF25C06B)
-                    else -> MaterialTheme.colorScheme.error
-                }
-            ),
+            .background(color.copy(alpha = 0.14f))
+            .border(1.dp, color.copy(alpha = 0.30f), CircleShape),
         contentAlignment = Alignment.Center,
     ) {
         Icon(
-            if (ok) Icons.Rounded.Check else Icons.Rounded.Close,
+            when {
+                ok -> Icons.Rounded.Check
+                unknown -> Icons.Rounded.QuestionMark
+                else -> Icons.Rounded.Close
+            },
             contentDescription = null,
-            tint = Color.White,
-            modifier = Modifier.size(20.dp),
+            tint = color,
+            modifier = Modifier.size(18.dp),
         )
     }
 }
