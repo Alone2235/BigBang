@@ -354,10 +354,13 @@ private fun loadApps(ctx: Context): List<AppEntry> {
                 val sys = (appInfo?.flags ?: 0) and
                     (android.content.pm.ApplicationInfo.FLAG_SYSTEM or
                         android.content.pm.ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) != 0
+                val label = if (appInfo != null) {
+                    runCatching { pm.getApplicationLabel(appInfo).toString() }
+                        .getOrDefault(pi.packageName)
+                } else pi.packageName
                 AppEntry(
                     pkg = pi.packageName,
-                    label = runCatching { pm.getApplicationLabel(pi.applicationInfo).toString() }
-                        .getOrDefault(pi.packageName),
+                    label = label,
                     isSystem = sys,
                 )
             }
