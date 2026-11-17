@@ -132,6 +132,8 @@ fun LargeShatterScreen() {
         ) {
             item { HeaderCard(cfg) { commit(cfg.copy(enableHook = it)) } }
 
+            item { HealthCard() }
+
             item {
                 ScopeCard(
                     cfg = cfg,
