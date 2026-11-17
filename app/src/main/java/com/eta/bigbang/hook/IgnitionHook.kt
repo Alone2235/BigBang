@@ -46,13 +46,18 @@ class IgnitionHook : IXposedHookLoadPackage, IXposedHookZygoteInit {
         if (pkg == "android" || pkg == "com.android.systemui") return
 
         val cfg = Settings.loadForHook()
-        XposedBridge.log("$TAG enter pkg=$pkg proc=${lpparam.processName} mode=${cfg.scopeMode} enabled=${cfg.enableHook} active=${cfg.isActiveFor(pkg)}")
+
+        // 关键：LSPosed 已经把我们注入了这个进程，说明作用域已允许。
+        // 模块内的"生效范围"只用作额外收窄/排除，不再是硬门槛，
+        // 否则用户必须在两处重复配置，极易出现"勾了却不生效"。
+        val allowed = cfg.isAllowedHere(pkg)
+        XposedBridge.log("$TAG enter pkg=$pkg proc=${lpparam.processName} mode=${cfg.scopeMode} enabled=${cfg.enableHook} allowed=$allowed")
 
         // 抓宿主 Application，供弹层拿一个稳定的 context
         hookApplicationAttach(lpparam)
 
         if (!cfg.enableHook) return
-        if (!cfg.isActiveFor(pkg)) return
+        if (!allowed) return
 
         hookTextSelection(lpparam, cfg)
     }

@@ -53,6 +53,23 @@ data class BigBangConfig(
             else -> pkg !in blacklist
         }
     }
+
+    /**
+     * hook 侧判断：进程已被 LSPosed 注入即视为作用域允许，
+     * 这里只做额外排除，避免"模块白名单与 LSPosed 作用域两处配置打架"。
+     *
+     * - 全局模式：走黑名单
+     * - 白名单模式：只有设置了白名单才收窄，未设置则全部放行
+     * - 推荐模式：未手动改白名单时全部放行
+     */
+    fun isAllowedHere(pkg: String): Boolean {
+        if (pkg in blacklist) return false
+        return when (scopeMode) {
+            Config.MODE_WHITELIST -> whitelist.isEmpty() || pkg in whitelist
+            Config.MODE_RECOMMENDED -> whitelist.isEmpty() || pkg in whitelist
+            else -> true
+        }
+    }
 }
 
 /** 预设搜索引擎 */
