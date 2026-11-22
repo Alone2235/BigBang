@@ -179,13 +179,13 @@ object BlastOverlay {
             y = (48 * d).toInt()
         }
 
-        // 面板初始状态：从中心炸开
+        // 面板初始完全透明：先让冲击波扩散，面板随后浮现，避免一上来就盖住冲击波
         val centerX = screenW / 2f
         val centerY = screenH / 2f
         panelView.pivotX = centerX
         panelView.pivotY = centerY
-        panelView.scaleX = 0.3f
-        panelView.scaleY = 0.3f
+        panelView.scaleX = 0.82f
+        panelView.scaleY = 0.82f
         panelView.alpha = 0f
 
         try {
@@ -198,52 +198,47 @@ object BlastOverlay {
         panel = panelView
         windowManager = wm
 
-        // ---- 冲击波 ----
+        // ---- 时间轴 ----
+        // t=0    冲击波开始扩散
+        // t=120  面板淡入 + 放大（此时冲击波已扩散一段，不会被立刻盖住）
+        // t=260  词块从中心飞散
         spawnShockwave(ctx, wm, centerX, centerY, d)
 
-        // ---- 面板炸开 ----
         panelView.animate()
             .alpha(1f)
             .scaleX(1f).scaleY(1f)
-            .setDuration(320)
-            .setInterpolator(OvershootInterpolator(1.6f))
+            .setStartDelay(120)
+            .setDuration(500)
+            .setInterpolator(DecelerateInterpolator(1.4f))
             .start()
 
         // ---- 词块从中心飞散 ----
-        // 不依赖 getLocationOnScreen（addView 后坐标尚未稳定，会导致位移算成 0），
-        // 直接按词块索引推算方向：以网格中心为原点，按行列偏移发散。
         panelView.post {
             val total = chipViews.size.coerceAtLeast(1)
             val rows = ((total + 3) / 4).coerceAtLeast(1)
-            val radius = (420 * d)
+            val radius = (460 * d)
 
             chipViews.forEachIndexed { i, v ->
                 val row = i / 4
                 val col = i % 4
-                // 归一化到 [-1, 1]
                 val nx = if (4 > 1) (col - 1.5f) / 1.5f else 0f
                 val ny = if (rows > 1) (row - (rows - 1) / 2f) / ((rows - 1) / 2f + 0.5f) else 0f
 
-                // 从中心向外飞：起点在反方向
-                val fromX = -nx * radius * 1.2f
-                val fromY = -ny * radius * 0.9f - 60f * d
-
-                v.translationX = fromX
-                v.translationY = fromY
-                v.scaleX = 0.15f
-                v.scaleY = 0.15f
+                v.translationX = -nx * radius * 1.35f
+                v.translationY = -ny * radius * 1.0f - 80f * d
+                v.scaleX = 0.1f
+                v.scaleY = 0.1f
                 v.alpha = 0f
-                v.rotation = nx * 40f
+                v.rotation = nx * 55f
 
-                val delay = 30L + i * 10L
                 v.animate()
                     .translationX(0f).translationY(0f)
                     .scaleX(1f).scaleY(1f)
                     .alpha(1f)
                     .rotation(0f)
-                    .setStartDelay(delay)
-                    .setDuration(420L)
-                    .setInterpolator(OvershootInterpolator(2.4f))
+                    .setStartDelay(260L + i * 16L)
+                    .setDuration(700L)
+                    .setInterpolator(OvershootInterpolator(1.9f))
                     .start()
             }
         }
@@ -278,7 +273,7 @@ object BlastOverlay {
         shockwave = view
 
         ValueAnimator.ofFloat(0f, 1f).apply {
-            duration = 560
+            duration = 720
             interpolator = DecelerateInterpolator(1.8f)
             addUpdateListener { view.progress = it.animatedValue as Float }
             addListener(object : AnimatorListenerAdapter() {
