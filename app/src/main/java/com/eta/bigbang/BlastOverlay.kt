@@ -16,6 +16,7 @@ import android.view.View
 import android.view.WindowManager
 import android.view.animation.DecelerateInterpolator
 import android.view.animation.OvershootInterpolator
+import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -24,10 +25,13 @@ import android.widget.Toast
 /**
  * 爆词弹层。
  *
- * 命名取自「炸开」的意象：
- * - fuse   引线（顶部标题条）
- * - shard  碎片（单个词块）
- * - blast  炸开动作（整体入场）
+ * 交互：
+ *  - 点词块 = 选中/取消（可多选，选中后高亮）
+ *  - 长按词块 = 直接复制该词
+ *  - 底部操作条：搜索 / 分享 / 复制 / 关闭
+ *    · 搜索用配置里的搜索引擎，浏览器可选
+ *    · 分享走系统分享面板
+ *    · 有选中时操作选中内容，无选中时操作全部
  */
 object BlastOverlay {
 
@@ -35,9 +39,22 @@ object BlastOverlay {
     private var windowManager: WindowManager? = null
     private val main = Handler(Looper.getMainLooper())
 
-    /** 词块入场间隔 */
-    private const val SHARD_STAGGER_MS = 22L
-    private const val SHARD_ANIM_MS = 260L
+    private const val SHARD_STAGGER_MS = 18L
+    private const val SHARD_ANIM_MS = 240L
+
+    // 配色（与 App 内设计系统一致）
+    private const val C_BG = 0xF2161A20.toInt()
+    private const val C_CHIP = 0xFF2A3138.toInt()
+    private const val C_CHIP_ON = 0xFF4A8CFF.toInt()
+    private const val C_TEXT = 0xFFFFFFFF.toInt()
+    private const val C_TEXT_DIM = 0x8AFFFFFF.toInt()
+    private const val C_DIVIDER = 0x33FFFFFF
+
+    /** 当前选中的词块索引 */
+    private val selected = LinkedHashSet<Int>()
+    private var chipViews = ArrayList<TextView>()
+    private var wordsRef = ArrayList<String>()
+    private var actionBar: LinearLayout? = null
 
     fun show(ctx: Context, words: List<String>, cfg: BigBangConfig) {
         main.post {
@@ -46,51 +63,43 @@ object BlastOverlay {
         }
     }
 
-    /**
-     * 说明：悬浮窗权限不用 canDrawOverlays 预先判断。
-     *
-     * 之前用宿主 context 调 Settings.canDrawOverlays()，查的是微信/传送门有没有
-     * 悬浮窗权限——它们当然没有，于是永远判定为"无权限"，即使模块自己已授权。
-     * 现在改为直接 addView 并捕获真实异常，既不会误报，失败时也能拿到确切原因。
-     */
-
     private fun blast(ctx: Context, words: List<String>, cfg: BigBangConfig) {
         dismiss()
+        selected.clear()
+        chipViews = ArrayList()
+        wordsRef = ArrayList(words)
 
         val wm = ctx.getSystemService(Context.WINDOW_SERVICE) as? WindowManager ?: return
         val d = ctx.resources.displayMetrics.density
 
-        // ---- 引线：标题条 ----
-        val fuse = TextView(ctx).apply {
+        // ---- 顶部标题条 ----
+        val title = TextView(ctx).apply {
             text = "大爆炸 · ${words.size} 块"
-            setTextColor(Color.WHITE)
+            setTextColor(C_TEXT)
             textSize = 13f
             gravity = Gravity.CENTER_VERTICAL
             setPadding((18 * d).toInt(), (12 * d).toInt(), (18 * d).toInt(), (12 * d).toInt())
         }
 
         val divider = View(ctx).apply {
-            setBackgroundColor(Color.parseColor("#33FFFFFF"))
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, 1
-            )
+            setBackgroundColor(C_DIVIDER)
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 1)
         }
 
-        // ---- 碎片容器 ----
+        // ---- 词块网格 ----
         val grid = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
             setPadding((10 * d).toInt(), (8 * d).toInt(), (10 * d).toInt(), (8 * d).toInt())
         }
 
-        val shards = ArrayList<View>()
-        words.chunked(4).take(24).forEach { rowWords ->
+        words.chunked(4).take(30).forEachIndexed { rowIdx, rowWords ->
             val row = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL }
-            rowWords.forEach { w ->
-                val shard = buildShard(ctx, w, cfg, d)
-                shards.add(shard)
-                row.addView(shard)
+            rowWords.forEachIndexed { colIdx, w ->
+                val index = rowIdx * 4 + colIdx
+                val chip = buildChip(ctx, w, index, cfg, d)
+                chipViews.add(chip)
+                row.addView(chip)
             }
-            // 补空占位，保持列对齐
             repeat(4 - rowWords.size) {
                 row.addView(View(ctx).apply {
                     layoutParams = LinearLayout.LayoutParams(0, 0, 1f)
@@ -105,23 +114,32 @@ object BlastOverlay {
             overScrollMode = View.OVER_SCROLL_NEVER
         }
 
+        // ---- 底部操作条 ----
+        val bar = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding((10 * d).toInt(), (8 * d).toInt(), (10 * d).toInt(), (10 * d).toInt())
+            gravity = Gravity.CENTER
+        }
+        actionBar = bar
+        buildActions(ctx, bar, cfg, d)
+
         val panelView = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
             background = GradientDrawable().apply {
                 cornerRadius = 22f * d
-                setColor(Color.parseColor("#F2161A20"))
+                setColor(C_BG)
             }
             elevation = 18f * d
-            addView(fuse)
+            addView(title)
             addView(divider)
-            addView(
-                scroller,
-                LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT,
-                    (340 * d).toInt()
-                )
-            )
-            // 入场：从下方弹起 + 缩放 + 透明渐显
+            addView(scroller, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, (300 * d).toInt()
+            ))
+            addView(View(ctx).apply {
+                setBackgroundColor(C_DIVIDER)
+                layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 1)
+            })
+            addView(bar)
             alpha = 0f
             translationY = 90f * d
             scaleX = 0.92f
@@ -141,100 +159,151 @@ object BlastOverlay {
             y = (56 * d).toInt()
         }
 
-        // 直接尝试添加，用真实结果判断权限，而不是靠 canDrawOverlays 猜。
-        // 跨进程场景下 canDrawOverlays 的判断并不可靠。
         try {
             wm.addView(panelView, params)
         } catch (t: Throwable) {
             android.util.Log.w("BigBang", "addView failed: ${t.javaClass.simpleName} ${t.message}")
-            runCatching {
-                Toast.makeText(
-                    ctx,
-                    "大爆炸：无法显示浮层（${t.javaClass.simpleName}）",
-                    Toast.LENGTH_LONG
-                ).show()
-            }
+            toast(ctx, "大爆炸：无法显示浮层（${t.javaClass.simpleName}）")
             return
         }
         panel = panelView
         windowManager = wm
 
-        // 面板入场动画
         panelView.animate()
-            .alpha(1f)
-            .translationY(0f)
-            .scaleX(1f)
-            .scaleY(1f)
+            .alpha(1f).translationY(0f).scaleX(1f).scaleY(1f)
             .setDuration(280)
             .setInterpolator(OvershootInterpolator(1.2f))
             .start()
 
-        // 词块错峰弹入
-        shards.forEachIndexed { i, v ->
+        chipViews.forEachIndexed { i, v ->
             v.alpha = 0f
-            v.translationY = 26f * d
+            v.translationY = 24f * d
             v.scaleX = 0.6f
             v.scaleY = 0.6f
-            v.animate()
-                .alpha(1f)
-                .translationY(0f)
-                .scaleX(1f)
-                .scaleY(1f)
-                .setStartDelay(60L + i * SHARD_STAGGER_MS)
+            v.animate().alpha(1f).translationY(0f).scaleX(1f).scaleY(1f)
+                .setStartDelay(50L + i * SHARD_STAGGER_MS)
                 .setDuration(SHARD_ANIM_MS)
                 .setInterpolator(OvershootInterpolator(1.8f))
                 .start()
         }
 
-        // 点空白处收起
         panelView.isClickable = true
         panelView.setOnClickListener { dismiss() }
     }
 
+    /* ---------------- 词块 ---------------- */
+
     @SuppressLint("ClickableViewAccessibility")
-    private fun buildShard(
+    private fun buildChip(
         ctx: Context,
         word: String,
+        index: Int,
         cfg: BigBangConfig,
         d: Float,
-    ): View {
+    ): TextView {
         val tv = TextView(ctx).apply {
             text = word
-            setTextColor(Color.WHITE)
+            setTextColor(C_TEXT)
             textSize = 15f
             gravity = Gravity.CENTER
             setPadding((14 * d).toInt(), (9 * d).toInt(), (14 * d).toInt(), (9 * d).toInt())
-            background = GradientDrawable().apply {
-                cornerRadius = 11f * d
-                setColor(Color.parseColor("#FF2E6BFF"))
-            }
+            background = chipBg(d, false)
 
-            setOnClickListener { v ->
-                // 按下回弹
-                v.animate().scaleX(0.88f).scaleY(0.88f).setDuration(70)
+            setOnClickListener {
+                if (index in selected) selected.remove(index) else selected.add(index)
+                background = chipBg(d, index in selected)
+                refreshActions(ctx, cfg, d)
+                animate().scaleX(0.92f).scaleY(0.92f).setDuration(60)
                     .withEndAction {
-                        v.animate().scaleX(1f).scaleY(1f).setDuration(140).start()
+                        animate().scaleX(1f).scaleY(1f).setDuration(120).start()
                     }.start()
-
-                if (cfg.enableSearch) search(ctx, word, cfg)
-                if (cfg.enableCopy) copy(ctx, word)
-                toast(ctx, if (cfg.enableCopy) "已复制「$word」" else "搜索「$word」")
-                main.postDelayed({ dismiss() }, 200)
             }
 
             setOnLongClickListener {
                 copy(ctx, word)
                 toast(ctx, "已复制「$word」")
-                main.postDelayed({ dismiss() }, 150)
                 true
             }
         }
-
         val lp = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
         lp.setMargins((4 * d).toInt(), (4 * d).toInt(), (4 * d).toInt(), (4 * d).toInt())
         tv.layoutParams = lp
         return tv
     }
+
+    private fun chipBg(d: Float, on: Boolean) = GradientDrawable().apply {
+        cornerRadius = 11f * d
+        setColor(if (on) C_CHIP_ON else C_CHIP)
+    }
+
+    /* ---------------- 操作条 ---------------- */
+
+    private fun buildActions(ctx: Context, bar: LinearLayout, cfg: BigBangConfig, d: Float) {
+        bar.removeAllViews()
+        val hasSel = selected.isNotEmpty()
+
+        bar.addView(actionBtn(ctx, "搜索", d) {
+            val q = currentText()
+            if (q.isBlank()) return@actionBtn
+            search(ctx, q, cfg)
+            dismiss()
+        })
+        bar.addView(actionBtn(ctx, "分享", d) {
+            val q = currentText()
+            if (q.isBlank()) return@actionBtn
+            share(ctx, q)
+            dismiss()
+        })
+        bar.addView(actionBtn(ctx, "复制", d) {
+            val q = currentText()
+            if (q.isBlank()) return@actionBtn
+            copy(ctx, q)
+            toast(ctx, "已复制 ${q.length} 字")
+            dismiss()
+        })
+        bar.addView(actionBtn(ctx, if (hasSel) "取消选择" else "全选", d) {
+            if (hasSel) {
+                selected.clear()
+            } else {
+                wordsRef.indices.forEach { selected.add(it) }
+            }
+            chipViews.forEachIndexed { i, v ->
+                v.background = chipBg(d, i in selected)
+            }
+            refreshActions(ctx, cfg, d)
+        })
+        bar.addView(actionBtn(ctx, "关闭", d) { dismiss() })
+    }
+
+    private fun refreshActions(ctx: Context, cfg: BigBangConfig, d: Float) {
+        actionBar?.let { buildActions(ctx, it, cfg, d) }
+    }
+
+    private fun actionBtn(ctx: Context, label: String, d: Float, onClick: () -> Unit): TextView {
+        return TextView(ctx).apply {
+            text = label
+            setTextColor(C_TEXT)
+            textSize = 13f
+            gravity = Gravity.CENTER
+            setPadding((12 * d).toInt(), (8 * d).toInt(), (12 * d).toInt(), (8 * d).toInt())
+            background = GradientDrawable().apply {
+                cornerRadius = 16f * d
+                setColor(0x1FFFFFFF)
+            }
+            setOnClickListener { onClick() }
+            val lp = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            lp.setMargins((3 * d).toInt(), 0, (3 * d).toInt(), 0)
+            layoutParams = lp
+        }
+    }
+
+    /** 有选中用选中内容，否则用全部 */
+    private fun currentText(): String {
+        if (selected.isEmpty()) return wordsRef.joinToString("")
+        return selected.sorted().mapNotNull { wordsRef.getOrNull(it) }.joinToString("")
+    }
+
+    /* ---------------- 动作 ---------------- */
 
     private fun search(ctx: Context, word: String, cfg: BigBangConfig) {
         val engine = SearchEngines.byId(cfg.searchEngineId)
@@ -249,9 +318,21 @@ object BlastOverlay {
             if (cfg.browserPkg.isNotBlank()) setPackage(cfg.browserPkg)
         }
         runCatching { ctx.startActivity(intent) }.onFailure {
+            // 指定浏览器不可用时，让系统弹出选择器
             Intent(Intent.ACTION_VIEW, Uri.parse(url))
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 .also { i -> runCatching { ctx.startActivity(i) } }
+        }
+    }
+
+    private fun share(ctx: Context, text: String) {
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_TEXT, text)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        runCatching {
+            ctx.startActivity(Intent.createChooser(intent, "分享到").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
         }
     }
 
@@ -273,24 +354,17 @@ object BlastOverlay {
             @Suppress("DEPRECATION")
             WindowManager.LayoutParams.TYPE_PHONE
 
-    /** 收起弹层：播放退出动画后再移除 */
     fun dismiss() {
         val p = panel ?: return
         val wm = windowManager
         panel = null
         windowManager = null
-
         val d = p.resources.displayMetrics.density
         p.animate()
-            .alpha(0f)
-            .translationY(60f * d)
-            .scaleX(0.94f)
-            .scaleY(0.94f)
+            .alpha(0f).translationY(60f * d).scaleX(0.94f).scaleY(0.94f)
             .setDuration(160)
             .setInterpolator(DecelerateInterpolator())
-            .withEndAction {
-                runCatching { wm?.removeView(p) }
-            }
+            .withEndAction { runCatching { wm?.removeView(p) } }
             .start()
     }
 }
