@@ -42,6 +42,8 @@ class PortalHook : IXposedHookLoadPackage, IXposedHookZygoteInit {
         private var lastFireAt = 0L
         private var lastText = ""
         @Volatile private var serviceHooked = false
+        private const val DIAG = true
+        @Volatile private var lastDiag = ""
     }
 
     override fun initZygote(startupParam: IXposedHookZygoteInit.StartupParam) {
@@ -114,8 +116,19 @@ class PortalHook : IXposedHookLoadPackage, IXposedHookZygoteInit {
     /** 读静态字段 sContent */
     private fun readContent(serviceClass: Class<*>): String? = runCatching {
         val textMode = XposedHelpers.getStaticObjectField(serviceClass, "sIsTextMode")
+        val content = XposedHelpers.getStaticObjectField(serviceClass, "sContent") as? String
+        if (DIAG) {
+            // 只在状态变化时打印，避免每 250ms 刷屏
+            val snapshot = "textMode=$textMode content=${content?.let { "len=${it.length}" } ?: "null"}"
+            if (snapshot != lastDiag) {
+                lastDiag = snapshot
+                XposedBridge.log("$TAG diag $snapshot")
+            }
+        }
         if (true != textMode) return null
-        XposedHelpers.getStaticObjectField(serviceClass, "sContent") as? String
+        content
+    }.onFailure {
+        if (DIAG) XposedBridge.log("$TAG readContent error: ${it.javaClass.simpleName} ${it.message}")
     }.getOrNull()
 
     private fun readAndFire(serviceObj: Any?, cfg: BigBangConfig) {
