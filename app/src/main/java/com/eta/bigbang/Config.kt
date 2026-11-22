@@ -23,6 +23,7 @@ object Config {
     const val KEY_ENABLE_VIBRATE = "enable_vibrate"
     const val KEY_MAX_BLOCKS = "max_blocks"          // 最多展示词块数
     const val KEY_ENABLE_HOOK = "enable_hook"
+    const val KEY_HOLD_MS = "hold_ms"
 
     // 生效范围模式取值
     const val MODE_GLOBAL = "global"
@@ -43,6 +44,7 @@ data class BigBangConfig(
     val enableVibrate: Boolean,
     val maxBlocks: Int,
     val enableHook: Boolean,
+    val holdMs: Long,
 ) {
     /** 该包名在当前配置下是否生效 */
     fun isActiveFor(pkg: String): Boolean {

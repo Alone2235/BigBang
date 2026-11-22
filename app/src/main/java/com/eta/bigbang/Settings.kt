@@ -22,6 +22,7 @@ object Settings {
         enableVibrate = true,
         maxBlocks = 200,
         enableHook = true,
+        holdMs = 450L,
     )
 
     /** 全局模式下也要跳过的敏感界面 */
@@ -52,6 +53,7 @@ object Settings {
             .putBoolean(Config.KEY_ENABLE_VIBRATE, cfg.enableVibrate)
             .putInt(Config.KEY_MAX_BLOCKS, cfg.maxBlocks)
             .putBoolean(Config.KEY_ENABLE_HOOK, cfg.enableHook)
+            .putLong(Config.KEY_HOLD_MS, cfg.holdMs)
             .apply()
     }
 
@@ -78,6 +80,7 @@ object Settings {
             enableVibrate = sp.getBoolean(Config.KEY_ENABLE_VIBRATE, d.enableVibrate),
             maxBlocks = sp.getInt(Config.KEY_MAX_BLOCKS, d.maxBlocks),
             enableHook = sp.getBoolean(Config.KEY_ENABLE_HOOK, d.enableHook),
+            holdMs = sp.getLong(Config.KEY_HOLD_MS, d.holdMs),
         )
     }
 }
