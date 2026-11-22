@@ -11,7 +11,6 @@ import android.content.Intent
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
-import android.graphics.RectF
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
@@ -211,41 +210,40 @@ object BlastOverlay {
             .start()
 
         // ---- 词块从中心飞散 ----
+        // 不依赖 getLocationOnScreen（addView 后坐标尚未稳定，会导致位移算成 0），
+        // 直接按词块索引推算方向：以网格中心为原点，按行列偏移发散。
         panelView.post {
-            val loc = IntArray(2)
-            panelView.getLocationOnScreen(loc)
-            val panelTop = loc[1].toFloat()
+            val total = chipViews.size.coerceAtLeast(1)
+            val rows = ((total + 3) / 4).coerceAtLeast(1)
+            val radius = (420 * d)
 
             chipViews.forEachIndexed { i, v ->
-                val vl = IntArray(2)
-                v.getLocationOnScreen(vl)
-                val targetX = vl[0].toFloat()
-                val targetY = vl[1].toFloat()
+                val row = i / 4
+                val col = i % 4
+                // 归一化到 [-1, 1]
+                val nx = if (4 > 1) (col - 1.5f) / 1.5f else 0f
+                val ny = if (rows > 1) (row - (rows - 1) / 2f) / ((rows - 1) / 2f + 0.5f) else 0f
 
-                // 从屏幕中心飞向目标位置
-                val fromX = centerX - targetX
-                val fromY = centerY - panelTop - targetY
+                // 从中心向外飞：起点在反方向
+                val fromX = -nx * radius * 1.2f
+                val fromY = -ny * radius * 0.9f - 60f * d
 
-                // 每个词块给一点随机角度偏移，让爆炸更自然
-                val jitter = Random.nextFloat() * 0.3f + 0.85f
-                v.translationX = fromX * jitter
-                v.translationY = fromY * jitter
-                v.scaleX = 0.2f
-                v.scaleY = 0.2f
+                v.translationX = fromX
+                v.translationY = fromY
+                v.scaleX = 0.15f
+                v.scaleY = 0.15f
                 v.alpha = 0f
-                v.rotation = (Random.nextFloat() - 0.5f) * 60f
+                v.rotation = nx * 40f
 
-                val dist = hypot(fromX, fromY)
-                val delay = 40L + (i * 12L)
-
+                val delay = 30L + i * 10L
                 v.animate()
                     .translationX(0f).translationY(0f)
                     .scaleX(1f).scaleY(1f)
                     .alpha(1f)
                     .rotation(0f)
                     .setStartDelay(delay)
-                    .setDuration(if (dist > 800) 460L else 380L)
-                    .setInterpolator(OvershootInterpolator(2.2f))
+                    .setDuration(420L)
+                    .setInterpolator(OvershootInterpolator(2.4f))
                     .start()
             }
         }
@@ -254,12 +252,14 @@ object BlastOverlay {
         panelView.setOnClickListener { dismiss() }
     }
 
-    /** 从长按点扩散的冲击波圆环 */
+    /** 从长按点扩散的冲击波圆环（全屏窗口，保证不被遮挡） */
     private fun spawnShockwave(ctx: Context, wm: WindowManager, cx: Float, cy: Float, d: Float) {
-        val size = (480 * d).toInt()
-        val view = ShockwaveView(ctx, size)
+        val dm = ctx.resources.displayMetrics
+        val w = dm.widthPixels
+        val h = dm.heightPixels
+        val view = ShockwaveView(ctx, w, h, cx, cy)
         val lp = WindowManager.LayoutParams(
-            size, size,
+            w, h,
             windowType(),
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                 WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
@@ -268,15 +268,18 @@ object BlastOverlay {
             android.graphics.PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            x = (cx - size / 2).toInt()
-            y = (cy - size / 2).toInt()
+            x = 0
+            y = 0
         }
-        runCatching { wm.addView(view, lp) }.onFailure { return }
+        runCatching { wm.addView(view, lp) }.onFailure {
+            android.util.Log.w("BigBang", "shockwave add failed: ${it.message}")
+            return
+        }
         shockwave = view
 
-        val anim = ValueAnimator.ofFloat(0f, 1f).apply {
-            duration = 520
-            interpolator = DecelerateInterpolator(1.6f)
+        ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = 560
+            interpolator = DecelerateInterpolator(1.8f)
             addUpdateListener { view.progress = it.animatedValue as Float }
             addListener(object : AnimatorListenerAdapter() {
                 override fun onAnimationEnd(animation: Animator) {
@@ -288,8 +291,14 @@ object BlastOverlay {
         }
     }
 
-    /** 冲击波：两层扩散圆环 + 中心闪光 */
-    private class ShockwaveView(ctx: Context, private val size: Int) : View(ctx) {
+    /** 冲击波：从长按点扩散的双层圆环 + 中心闪光 */
+    private class ShockwaveView(
+        ctx: Context,
+        private val w: Int,
+        private val h: Int,
+        private val cx: Float,
+        private val cy: Float,
+    ) : View(ctx) {
         var progress: Float = 0f
             set(value) {
                 field = value
@@ -304,32 +313,33 @@ object BlastOverlay {
             style = Paint.Style.FILL
             color = 0xFF4A8CFF.toInt()
         }
-        private val rect = RectF()
+        private val density = ctx.resources.displayMetrics.density
+        private val maxR = (hypot(w.toFloat(), h.toFloat()) * 0.55f)
 
         override fun onDraw(canvas: Canvas) {
-            val c = size / 2f
             val p = progress.coerceIn(0f, 1f)
 
             // 中心闪光：快速放大淡出
-            if (p < 0.45f) {
-                val flashR = size * 0.06f + size * 0.22f * (p / 0.45f)
-                glowPaint.alpha = ((1f - p / 0.45f) * 150).toInt()
-                canvas.drawCircle(c, c, flashR, glowPaint)
+            if (p < 0.5f) {
+                val k = p / 0.5f
+                val flashR = (30f + 180f * k) * density
+                glowPaint.alpha = ((1f - k) * 170).toInt()
+                canvas.drawCircle(cx, cy, flashR, glowPaint)
             }
 
             // 主圆环
-            ringPaint.strokeWidth = (3f * (1f - p) + 1f) * resources.displayMetrics.density
-            ringPaint.alpha = ((1f - p) * 200).toInt()
-            val r1 = size * 0.06f + size * 0.42f * p
-            canvas.drawCircle(c, c, r1, ringPaint)
+            val r1 = (20f * density) + maxR * p
+            ringPaint.strokeWidth = (4f * (1f - p) + 1.5f) * density
+            ringPaint.alpha = ((1f - p) * 220).toInt()
+            canvas.drawCircle(cx, cy, r1, ringPaint)
 
-            // 副圆环（稍慢、更淡）
-            if (p > 0.15f) {
-                val p2 = (p - 0.15f) / 0.85f
-                ringPaint.alpha = ((1f - p2) * 110).toInt()
-                ringPaint.strokeWidth = (2f * (1f - p2) + 0.8f) * resources.displayMetrics.density
-                val r2 = size * 0.04f + size * 0.36f * p2
-                canvas.drawCircle(c, c, r2, ringPaint)
+            // 副圆环（延后、更淡）
+            if (p > 0.12f) {
+                val p2 = (p - 0.12f) / 0.88f
+                val r2 = (12f * density) + maxR * 0.78f * p2
+                ringPaint.alpha = ((1f - p2) * 120).toInt()
+                ringPaint.strokeWidth = (2.5f * (1f - p2) + 1f) * density
+                canvas.drawCircle(cx, cy, r2, ringPaint)
             }
         }
     }
