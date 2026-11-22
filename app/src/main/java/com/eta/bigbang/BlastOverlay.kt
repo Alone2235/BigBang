@@ -25,8 +25,10 @@ import android.widget.Toast
 /**
  * 爆词弹层。
  *
- * 视觉：深色玻璃面板 + 澎湃蓝（#4A8CFF）强调色，圆角与间距按 4pt 网格。
- * 交互：点词块多选、长按复制、底部操作条（搜索/分享/复制/全选/关闭）。
+ * 视觉：白蓝浅色（与 App 内 HyperBlue 体系一致）。
+ *  - 面板：白色半透明玻璃，透出底下的内容
+ *  - 强调色：#4A8CFF 澎湃蓝
+ *  - 词块：浅灰底，选中变蓝
  */
 object BlastOverlay {
 
@@ -37,15 +39,16 @@ object BlastOverlay {
     private const val SHARD_STAGGER_MS = 18L
     private const val SHARD_ANIM_MS = 240L
 
-    // ---- 配色：深色玻璃 + 澎湃蓝 ----
-    private const val C_PANEL = 0xF01A1D24.toInt()   // 面板底
-    private const val C_CHIP = 0x14FFFFFF            // 未选中词块（8% 白）
+    // ---- 白蓝配色 ----
+    private const val C_PANEL = 0xE6FFFFFF.toInt()   // 白色，约 90% 不透明，能透出底层内容
+    private const val C_CHIP = 0xFFF2F4F8.toInt()    // 词块底（浅灰蓝）
     private const val C_CHIP_ON = 0xFF4A8CFF.toInt() // 选中（澎湃蓝）
-    private const val C_TEXT = 0xFFF2F4F8.toInt()
-    private const val C_TEXT_DIM = 0x99FFFFFF.toInt()
-    private const val C_DIVIDER = 0x1AFFFFFF
-    private const val C_BTN = 0x1FFFFFFF
+    private const val C_TEXT = 0xFF1B1F27.toInt()    // 主文字
+    private const val C_TEXT_DIM = 0xFF878D99.toInt()// 次要文字
+    private const val C_DIVIDER = 0x14000000         // 分隔线
+    private const val C_BTN = 0xFFEDF2FB.toInt()     // 次要按钮底
     private const val C_ACCENT = 0xFF4A8CFF.toInt()
+    private const val C_STROKE = 0x0F1B1F27          // 卡片描边
 
     private val selected = LinkedHashSet<Int>()
     private var chipViews = ArrayList<TextView>()
@@ -144,7 +147,7 @@ object BlastOverlay {
             background = GradientDrawable().apply {
                 cornerRadius = 24f * d
                 setColor(C_PANEL)
-                setStroke((0.8f * d).toInt(), 0x26FFFFFF)
+                setStroke((0.8f * d).toInt(), C_STROKE)
             }
             addView(header)
             addView(divider)
@@ -252,7 +255,7 @@ object BlastOverlay {
     private fun chipBg(d: Float, on: Boolean) = GradientDrawable().apply {
         cornerRadius = 12f * d
         setColor(if (on) C_CHIP_ON else C_CHIP)
-        if (!on) setStroke((0.6f * d).toInt(), 0x14FFFFFF)
+        if (!on) setStroke((0.6f * d).toInt(), C_STROKE)
     }
 
     private fun updateCount() {
@@ -312,18 +315,14 @@ object BlastOverlay {
     ): TextView {
         return TextView(ctx).apply {
             text = label
-            setTextColor(Color.WHITE)
+            setTextColor(if (primary) Color.WHITE else C_TEXT)
             textSize = 14f
             gravity = Gravity.CENTER
             typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
             setPadding((12 * d).toInt(), (11 * d).toInt(), (12 * d).toInt(), (11 * d).toInt())
             background = GradientDrawable().apply {
                 cornerRadius = 14f * d
-                if (primary) {
-                    setColor(C_ACCENT)
-                } else {
-                    setColor(C_BTN)
-                }
+                setColor(if (primary) C_ACCENT else C_BTN)
             }
             setOnClickListener { onClick() }
             val lp = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
@@ -402,4 +401,5 @@ object BlastOverlay {
             .withEndAction { runCatching { wm?.removeView(p) } }
             .start()
     }
+
 }
