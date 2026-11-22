@@ -38,6 +38,7 @@ class PortalHook : IXposedHookLoadPackage, IXposedHookZygoteInit {
         private const val CONTROL_KEY = "observe_control_event"
 
         private val hookedCallbacks = HashSet<Class<*>>()
+        @Volatile private var serviceClass: Class<*>? = null
         private var appContext: Context? = null
         private var cfg: BigBangConfig? = null
         private var lastFireAt = 0L
@@ -66,6 +67,7 @@ class PortalHook : IXposedHookLoadPackage, IXposedHookZygoteInit {
             XposedBridge.log("$TAG $SERVICE_CLASS NOT found")
             return
         }
+        serviceClass = clazz
         XposedBridge.log("$TAG found $SERVICE_CLASS")
 
         // service 创建后：拿 context，并找出它的 mCallback 挂上去
@@ -122,42 +124,45 @@ class PortalHook : IXposedHookLoadPackage, IXposedHookZygoteInit {
         }
     }
 
-    /** 回调里拿内容：getPropertyMap() → 文本 */
+    /** 回调里拿内容：文字在 service 的静态字段 sContent，不在 propertyMap */
     private fun handleCallback(param: XC_MethodHook.MethodHookParam) {
         val c = cfg ?: return
         val arg = param.args.getOrNull(0) ?: return
 
+        // propertyMap 只有坐标等元信息，先记下来便于排查
         val props = runCatching {
             @Suppress("UNCHECKED_CAST")
             XposedHelpers.callMethod(arg, "getPropertyMap") as? Map<String, Any>
         }.getOrNull()
-
-        if (props == null) {
-            XposedBridge.log("$TAG callback: no property map")
-            return
+        if (props != null) {
+            XposedBridge.log("$TAG callback keys=${props.keys}")
+            val motion = props[MOTION_KEY]
+            if (motion is MotionEvent) {
+                XposedBridge.log("$TAG callback: motion only, skip")
+                return
+            }
         }
 
-        // 纯 MotionEvent 的结果不是取词内容，跳过
-        val motion = props[MOTION_KEY]
-        if (motion is MotionEvent) {
-            XposedBridge.log("$TAG callback: motion only, skip")
-            return
-        }
-
-        XposedBridge.log("$TAG callback keys=${props.keys}")
-
-        // 尝试多种可能的文本键
-        val text = props.entries.firstOrNull { (k, v) ->
-            v is String && v.isNotBlank() &&
-                (k.contains("text", true) || k.contains("content", true))
-        }?.value as? String
-
+        // 关键：文字在 TextContentExtensionService 的静态字段
+        val text = readStaticContent()
         if (text.isNullOrBlank()) {
-            XposedBridge.log("$TAG callback: no text in props")
+            XposedBridge.log("$TAG callback: sContent empty")
             return
         }
-
+        XposedBridge.log("$TAG callback got text len=${text.length}: ${text.take(40)}")
         fire(text, c)
+    }
+
+    /** 读传送门静态字段：sIsTextMode / sContent */
+    private fun readStaticContent(): String? {
+        val clazz = serviceClass ?: return null
+        return runCatching {
+            val textMode = XposedHelpers.getStaticObjectField(clazz, "sIsTextMode")
+            val content = XposedHelpers.getStaticObjectField(clazz, "sContent") as? String
+            XposedBridge.log("$TAG sIsTextMode=$textMode sContent=${content?.let { "len=${it.length}" } ?: "null"}")
+            if (true != textMode) return null
+            content
+        }.getOrNull()
     }
 
     private fun fire(text: String, c: BigBangConfig) {
