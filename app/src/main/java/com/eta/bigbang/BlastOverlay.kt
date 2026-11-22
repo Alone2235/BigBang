@@ -1,11 +1,17 @@
 package com.eta.bigbang
 
+import android.animation.Animator
+import android.animation.AnimatorListenerAdapter
+import android.animation.ValueAnimator
 import android.annotation.SuppressLint
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.RectF
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
@@ -21,34 +27,36 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+import kotlin.math.hypot
+import kotlin.random.Random
 
 /**
  * 爆词弹层。
  *
- * 视觉：白蓝浅色（与 App 内 HyperBlue 体系一致）。
- *  - 面板：白色半透明玻璃，透出底下的内容
- *  - 强调色：#4A8CFF 澎湃蓝
- *  - 词块：浅灰底，选中变蓝
+ * 视觉：白蓝浅色玻璃（HyperBlue 体系）。
+ * 动效：真正的「爆炸」——
+ *  1. 从长按点闪出一圈冲击波（自定义 View 绘制扩散圆环）
+ *  2. 每个词块从中心点朝自己的位置飞出，带旋转、缩放、透明度变化
+ *  3. 飞到位后回弹落定
+ *  4. 关闭时反向收拢
  */
 object BlastOverlay {
 
     private var panel: View? = null
     private var windowManager: WindowManager? = null
+    private var shockwave: View? = null
     private val main = Handler(Looper.getMainLooper())
 
-    private const val SHARD_STAGGER_MS = 18L
-    private const val SHARD_ANIM_MS = 240L
-
     // ---- 白蓝配色 ----
-    private const val C_PANEL = 0xE6FFFFFF.toInt()   // 白色，约 90% 不透明，能透出底层内容
-    private const val C_CHIP = 0xFFF2F4F8.toInt()    // 词块底（浅灰蓝）
-    private const val C_CHIP_ON = 0xFF4A8CFF.toInt() // 选中（澎湃蓝）
-    private const val C_TEXT = 0xFF1B1F27.toInt()    // 主文字
-    private const val C_TEXT_DIM = 0xFF878D99.toInt()// 次要文字
-    private const val C_DIVIDER = 0x14000000         // 分隔线
-    private const val C_BTN = 0xFFEDF2FB.toInt()     // 次要按钮底
+    private const val C_PANEL = 0xE6FFFFFF.toInt()
+    private const val C_CHIP = 0xFFF2F4F8.toInt()
+    private const val C_CHIP_ON = 0xFF4A8CFF.toInt()
+    private const val C_TEXT = 0xFF1B1F27.toInt()
+    private const val C_TEXT_DIM = 0xFF878D99.toInt()
+    private const val C_DIVIDER = 0x14000000
+    private const val C_BTN = 0xFFEDF2FB.toInt()
     private const val C_ACCENT = 0xFF4A8CFF.toInt()
-    private const val C_STROKE = 0x0F1B1F27          // 卡片描边
+    private const val C_STROKE = 0x0F1B1F27
 
     private val selected = LinkedHashSet<Int>()
     private var chipViews = ArrayList<TextView>()
@@ -71,14 +79,16 @@ object BlastOverlay {
 
         val wm = ctx.getSystemService(Context.WINDOW_SERVICE) as? WindowManager ?: return
         val d = ctx.resources.displayMetrics.density
+        val dm = ctx.resources.displayMetrics
+        val screenW = dm.widthPixels
+        val screenH = dm.heightPixels
 
-        // ---- 顶部：标题 + 计数 ----
+        // ---- 顶部 ----
         val header = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding((18 * d).toInt(), (14 * d).toInt(), (18 * d).toInt(), (12 * d).toInt())
         }
-
         val title = TextView(ctx).apply {
             text = "大爆炸"
             setTextColor(C_TEXT)
@@ -86,18 +96,14 @@ object BlastOverlay {
             typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
             letterSpacing = 0.02f
         }
-
         val count = TextView(ctx).apply {
             text = "${words.size} 块"
             setTextColor(C_TEXT_DIM)
             textSize = 12f
         }
         countLabel = count
-
         header.addView(title)
-        header.addView(View(ctx).apply {
-            layoutParams = LinearLayout.LayoutParams(0, 0, 1f)
-        })
+        header.addView(View(ctx).apply { layoutParams = LinearLayout.LayoutParams(0, 0, 1f) })
         header.addView(count)
 
         val divider = View(ctx).apply {
@@ -110,7 +116,6 @@ object BlastOverlay {
             orientation = LinearLayout.VERTICAL
             setPadding((12 * d).toInt(), (10 * d).toInt(), (12 * d).toInt(), (10 * d).toInt())
         }
-
         words.chunked(4).take(30).forEachIndexed { rowIdx, rowWords ->
             val row = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL }
             rowWords.forEachIndexed { colIdx, w ->
@@ -133,7 +138,7 @@ object BlastOverlay {
             overScrollMode = View.OVER_SCROLL_NEVER
         }
 
-        // ---- 底部操作条 ----
+        // ---- 操作条 ----
         val bar = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
             setPadding((12 * d).toInt(), (10 * d).toInt(), (12 * d).toInt(), (12 * d).toInt())
@@ -159,12 +164,9 @@ object BlastOverlay {
                 layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 1)
             })
             addView(bar)
-            alpha = 0f
-            translationY = 90f * d
-            scaleX = 0.92f
-            scaleY = 0.92f
         }
 
+        val panelH = (460 * d).toInt()
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.WRAP_CONTENT,
@@ -178,6 +180,15 @@ object BlastOverlay {
             y = (48 * d).toInt()
         }
 
+        // 面板初始状态：从中心炸开
+        val centerX = screenW / 2f
+        val centerY = screenH / 2f
+        panelView.pivotX = centerX
+        panelView.pivotY = centerY
+        panelView.scaleX = 0.3f
+        panelView.scaleY = 0.3f
+        panelView.alpha = 0f
+
         try {
             wm.addView(panelView, params)
         } catch (t: Throwable) {
@@ -188,26 +199,139 @@ object BlastOverlay {
         panel = panelView
         windowManager = wm
 
+        // ---- 冲击波 ----
+        spawnShockwave(ctx, wm, centerX, centerY, d)
+
+        // ---- 面板炸开 ----
         panelView.animate()
-            .alpha(1f).translationY(0f).scaleX(1f).scaleY(1f)
-            .setDuration(300)
-            .setInterpolator(OvershootInterpolator(1.1f))
+            .alpha(1f)
+            .scaleX(1f).scaleY(1f)
+            .setDuration(320)
+            .setInterpolator(OvershootInterpolator(1.6f))
             .start()
 
-        chipViews.forEachIndexed { i, v ->
-            v.alpha = 0f
-            v.translationY = 22f * d
-            v.scaleX = 0.6f
-            v.scaleY = 0.6f
-            v.animate().alpha(1f).translationY(0f).scaleX(1f).scaleY(1f)
-                .setStartDelay(50L + i * SHARD_STAGGER_MS)
-                .setDuration(SHARD_ANIM_MS)
-                .setInterpolator(OvershootInterpolator(1.8f))
-                .start()
+        // ---- 词块从中心飞散 ----
+        panelView.post {
+            val loc = IntArray(2)
+            panelView.getLocationOnScreen(loc)
+            val panelTop = loc[1].toFloat()
+
+            chipViews.forEachIndexed { i, v ->
+                val vl = IntArray(2)
+                v.getLocationOnScreen(vl)
+                val targetX = vl[0].toFloat()
+                val targetY = vl[1].toFloat()
+
+                // 从屏幕中心飞向目标位置
+                val fromX = centerX - targetX
+                val fromY = centerY - panelTop - targetY
+
+                // 每个词块给一点随机角度偏移，让爆炸更自然
+                val jitter = Random.nextFloat() * 0.3f + 0.85f
+                v.translationX = fromX * jitter
+                v.translationY = fromY * jitter
+                v.scaleX = 0.2f
+                v.scaleY = 0.2f
+                v.alpha = 0f
+                v.rotation = (Random.nextFloat() - 0.5f) * 60f
+
+                val dist = hypot(fromX, fromY)
+                val delay = 40L + (i * 12L)
+
+                v.animate()
+                    .translationX(0f).translationY(0f)
+                    .scaleX(1f).scaleY(1f)
+                    .alpha(1f)
+                    .rotation(0f)
+                    .setStartDelay(delay)
+                    .setDuration(if (dist > 800) 460L else 380L)
+                    .setInterpolator(OvershootInterpolator(2.2f))
+                    .start()
+            }
         }
 
         panelView.isClickable = true
         panelView.setOnClickListener { dismiss() }
+    }
+
+    /** 从长按点扩散的冲击波圆环 */
+    private fun spawnShockwave(ctx: Context, wm: WindowManager, cx: Float, cy: Float, d: Float) {
+        val size = (480 * d).toInt()
+        val view = ShockwaveView(ctx, size)
+        val lp = WindowManager.LayoutParams(
+            size, size,
+            windowType(),
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+            android.graphics.PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            x = (cx - size / 2).toInt()
+            y = (cy - size / 2).toInt()
+        }
+        runCatching { wm.addView(view, lp) }.onFailure { return }
+        shockwave = view
+
+        val anim = ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = 520
+            interpolator = DecelerateInterpolator(1.6f)
+            addUpdateListener { view.progress = it.animatedValue as Float }
+            addListener(object : AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: Animator) {
+                    runCatching { wm.removeView(view) }
+                    if (shockwave === view) shockwave = null
+                }
+            })
+            start()
+        }
+    }
+
+    /** 冲击波：两层扩散圆环 + 中心闪光 */
+    private class ShockwaveView(ctx: Context, private val size: Int) : View(ctx) {
+        var progress: Float = 0f
+            set(value) {
+                field = value
+                invalidate()
+            }
+
+        private val ringPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            color = 0xFF4A8CFF.toInt()
+        }
+        private val glowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.FILL
+            color = 0xFF4A8CFF.toInt()
+        }
+        private val rect = RectF()
+
+        override fun onDraw(canvas: Canvas) {
+            val c = size / 2f
+            val p = progress.coerceIn(0f, 1f)
+
+            // 中心闪光：快速放大淡出
+            if (p < 0.45f) {
+                val flashR = size * 0.06f + size * 0.22f * (p / 0.45f)
+                glowPaint.alpha = ((1f - p / 0.45f) * 150).toInt()
+                canvas.drawCircle(c, c, flashR, glowPaint)
+            }
+
+            // 主圆环
+            ringPaint.strokeWidth = (3f * (1f - p) + 1f) * resources.displayMetrics.density
+            ringPaint.alpha = ((1f - p) * 200).toInt()
+            val r1 = size * 0.06f + size * 0.42f * p
+            canvas.drawCircle(c, c, r1, ringPaint)
+
+            // 副圆环（稍慢、更淡）
+            if (p > 0.15f) {
+                val p2 = (p - 0.15f) / 0.85f
+                ringPaint.alpha = ((1f - p2) * 110).toInt()
+                ringPaint.strokeWidth = (2f * (1f - p2) + 0.8f) * resources.displayMetrics.density
+                val r2 = size * 0.04f + size * 0.36f * p2
+                canvas.drawCircle(c, c, r2, ringPaint)
+            }
+        }
     }
 
     /* ---------------- 词块 ---------------- */
@@ -234,15 +358,22 @@ object BlastOverlay {
                 setTextColor(if (index in selected) Color.WHITE else C_TEXT)
                 updateCount()
                 refreshActions(ctx, cfg, d)
-                animate().scaleX(0.92f).scaleY(0.92f).setDuration(60)
+                // 选中时轻微弹一下
+                animate().scaleX(0.88f).scaleY(0.88f).setDuration(60)
                     .withEndAction {
-                        animate().scaleX(1f).scaleY(1f).setDuration(120).start()
+                        animate().scaleX(1f).scaleY(1f).setDuration(150)
+                            .setInterpolator(OvershootInterpolator(2.5f)).start()
                     }.start()
             }
 
             setOnLongClickListener {
                 copy(ctx, word)
                 toast(ctx, "已复制「$word」")
+                animate().scaleX(1.12f).scaleY(1.12f).setDuration(90)
+                    .withEndAction {
+                        animate().scaleX(1f).scaleY(1f).setDuration(160)
+                            .setInterpolator(OvershootInterpolator(2f)).start()
+                    }.start()
                 true
             }
         }
@@ -392,14 +523,17 @@ object BlastOverlay {
         val p = panel ?: return
         val wm = windowManager
         panel = null
+        val sw = shockwave
+        shockwave = null
+        runCatching { sw?.let { wm?.removeView(it) } }
         windowManager = null
-        val d = p.resources.displayMetrics.density
+
+        // 收拢动画：缩放 + 淡出
         p.animate()
-            .alpha(0f).translationY(60f * d).scaleX(0.94f).scaleY(0.94f)
-            .setDuration(160)
-            .setInterpolator(DecelerateInterpolator())
+            .alpha(0f).scaleX(0.85f).scaleY(0.85f)
+            .setDuration(180)
+            .setInterpolator(DecelerateInterpolator(1.4f))
             .withEndAction { runCatching { wm?.removeView(p) } }
             .start()
     }
-
 }
