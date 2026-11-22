@@ -51,6 +51,7 @@
             android:name="xposedsharedprefs"
             android:value="true" />
 
+
     </application>
 
 </manifest>

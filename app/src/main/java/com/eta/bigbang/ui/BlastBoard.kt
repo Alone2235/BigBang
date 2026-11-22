@@ -146,7 +146,11 @@ fun LargeShatterScreen() {
                     )
                 }
 
-                item { StatusCard(cfg) { commit(cfg.copy(enableHook = it)) } }
+                item {
+                    StatusCard(cfg) { on ->
+                        commit(cfg.copy(enableHook = on))
+                    }
+                }
 
                 item { HealthCard() }
 
